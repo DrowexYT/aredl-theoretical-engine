@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         AREDL Theoretical Profile & Pack Engine (V1.0 Public Release)
+// @name         AREDL Theoretical Profile & Pack Engine (V1.1 Public Release)
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Client-side progression sandbox for AREDL. Enables theoretical level completions, dynamic pack evaluation, point calculations, live leaderboard estimations, and seamless auto-detection of user profiles.
+// @version      1.1
+// @description  Client-side progression sandbox for AREDL. Enables theoretical level completions, dynamic pack evaluation, point calculations, live leaderboard estimations, auto-syncing list placements, and seamless auto-detection of user profiles.
 // @author       Drowex
 // @match        https://aredl.net/*
 // @grant        GM_getValue
@@ -62,6 +62,45 @@
         GM_setValue('aredl_theo_v15', records);
     }
 
+    // AUTO-SYNC ENGINE: Checks saved theoretical levels against fresh API data to update shifted ranks and decayed points
+    async function syncRecordsWithApi() {
+        const apiData = await fetchAredlApi();
+        if (!apiData) return;
+
+        let records = getCustomRecords();
+        let changed = false;
+
+        records.forEach(rec => {
+            const cleanRecName = cleanString(rec.name);
+            
+            // STRICT ID MATCHING FIX: Prevents name collisions (e.g., Azurite #600 vs Azurite #1518)
+            const apiMatch = apiData.find(l => {
+                if (rec.level_id && l.level_id) {
+                    return String(l.level_id) === String(rec.level_id);
+                }
+                return cleanString(l.name) === cleanRecName;
+            });
+            
+            if (apiMatch) {
+                const newRank = apiMatch.position;
+                const newPoints = apiMatch.points / 10;
+                
+                if (rec.rank !== newRank || rec.points !== newPoints) {
+                    rec.rank = newRank;
+                    rec.points = newPoints;
+                    changed = true;
+                }
+            }
+        });
+
+        if (changed) {
+            saveCustomRecords(records);
+            if (isMyProfilePage() && !window.location.search.includes('tab=packs')) {
+                render(); // Instantly refresh UI if you are viewing your profile
+            }
+        }
+    }
+
     function getLegitCompletions() { return GM_getValue('aredl_legit_completions_v1', ['bloodbath', 'conical depression', 'the ultimate demon', 'cataclysm']); }
     function saveLegitCompletions(list) { GM_setValue('aredl_legit_completions_v1', list); }
 
@@ -111,7 +150,7 @@
             z-index: 100000; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px);
         }
         .theo-modal {
-            background: #1a1c23; border: 1px solid #ff9800; border-radius: 10px; padding: 24px; width: 440px;
+            background: #1a1c23; border: 1px solid #ff9800; border-radius: 10px; padding: 24px; width: 440px; 
             display: flex; flex-direction: column; gap: 14px; box-shadow: 0 10px 30px rgba(255, 152, 0, 0.2); font-family: sans-serif; color: white;
         }
         .theo-input-group { display: flex; flex-direction: column; gap: 6px; position: relative; }
@@ -132,7 +171,7 @@
         .theo-modal-btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
         .theo-btn-cancel { background: transparent; border: 1px solid #666; color: #ccc; padding: 8px 18px; border-radius: 6px; cursor: pointer; font-weight: 600; }
         .theo-btn-save { background: #ff9800; border: none; color: #000; font-weight: bold; padding: 8px 18px; border-radius: 6px; cursor: pointer; }
-
+        
         .theo-menu-container { position: absolute; top: 10px; left: 10px; z-index: 200; font-family: sans-serif; }
         .theo-menu-btn { background: rgba(0, 0, 0, 0.6); color: #fff; border: 1px solid rgba(255, 152, 0, 0.4); border-radius: 4px; width: 26px; height: 26px; font-size: 14px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
         .theo-menu-btn:hover { background: #ff9800; color: #000; border-color: #ff9800; }
@@ -154,7 +193,7 @@
             font-size: 11px !important;
             font-weight: 800 !important;
             color: #fff !important;
-            background: #d97706 !important;
+            background: #d97706 !important; 
             border: 1px solid #d97706 !important;
             border-radius: 4px !important;
             padding: 2px 6px !important;
@@ -189,14 +228,14 @@
         }
 
         /* Color Overrides for Pack Levels */
-        .theo-level-colored,
-        .theo-level-colored *,
+        .theo-level-colored, 
+        .theo-level-colored *, 
         .theo-level-colored img {
             filter: none !important;
             -webkit-filter: none !important;
             opacity: 1 !important;
         }
-
+        
         .theo-pack-level-incomplete { filter: grayscale(100%) !important; opacity: 1 !important; transition: filter 0.2s ease-in-out; }
         .theo-hide-native-counter { display: none !important; }
     `;
@@ -285,7 +324,7 @@
                 }
             });
         });
-
+        
         earnedPacks.sort((a, b) => b.points - a.points);
         return { earnedPacks, totalPoints };
     }
@@ -1142,8 +1181,8 @@
 
                         const badge = document.createElement('span');
                         parent.appendChild(badge);
-                    }
-
+                    } 
+                    
                     const badge = parent.querySelector('.theo-sidebar-badge') || parent.lastChild;
                     if (badge) {
                         let progressClass = packData.isComplete ? 'completed' : `prog-${Math.min(packData.done, 5)}`;
@@ -1376,6 +1415,7 @@
 
     setTimeout(() => {
         checkAndAutoDetectUser();
+        syncRecordsWithApi(); // Run the auto-sync engine on startup
         if (isMyProfilePage()) {
             if (window.location.search.includes('tab=packs')) renderProfilePacksTab();
             else render();
