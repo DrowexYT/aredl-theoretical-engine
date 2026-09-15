@@ -2,7 +2,7 @@
 // @name         AREDL Theoretical Profile & Pack Engine (V1.1 Public Release)
 // @namespace    http://tampermonkey.net/
 // @version      1.1
-// @description  Client-side progression sandbox for AREDL. Enables theoretical level completions, dynamic pack evaluation, point calculations, live leaderboard estimations, auto-syncing list placements, and seamless auto-detection of user profiles.
+// @description  Client-side progression sandbox for AREDL. Enables theoretical level completions, dynamic pack evaluation, point calculations, live leaderboard estimations, auto-syncing list placements, and custom completion dates.
 // @author       Drowex
 // @match        https://aredl.net/*
 // @grant        GM_getValue
@@ -73,7 +73,7 @@
         records.forEach(rec => {
             const cleanRecName = cleanString(rec.name);
             
-            // STRICT ID MATCHING FIX: Prevents name collisions (e.g., Azurite #600 vs Azurite #1518)
+            // STRICT ID MATCHING FIX: Prevents name collisions
             const apiMatch = apiData.find(l => {
                 if (rec.level_id && l.level_id) {
                     return String(l.level_id) === String(rec.level_id);
@@ -154,10 +154,11 @@
             display: flex; flex-direction: column; gap: 14px; box-shadow: 0 10px 30px rgba(255, 152, 0, 0.2); font-family: sans-serif; color: white;
         }
         .theo-input-group { display: flex; flex-direction: column; gap: 6px; position: relative; }
-        .theo-modal input[type="text"] {
+        .theo-modal input[type="text"], .theo-modal input[type="date"] {
             background: #252830; border: 1px solid #444; color: white; padding: 10px 12px; border-radius: 6px; font-size: 14px; width: 100%; box-sizing: border-box;
+            color-scheme: dark;
         }
-        .theo-modal input[type="text"]:focus { outline: none; border-color: #ff9800; }
+        .theo-modal input:focus { outline: none; border-color: #ff9800; }
         .theo-modal label { font-size: 12px; color: #aaa; font-weight: bold; }
         .theo-checkbox-group { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #eee; cursor: pointer; user-select: none; }
         .theo-checkbox-group input { width: 16px; height: 16px; cursor: pointer; accent-color: #ff9800; }
@@ -193,7 +194,7 @@
             font-size: 11px !important;
             font-weight: 800 !important;
             color: #fff !important;
-            background: #d97706 !important; 
+            background: #d97706 !important;
             border: 1px solid #d97706 !important;
             border-radius: 4px !important;
             padding: 2px 6px !important;
@@ -228,14 +229,14 @@
         }
 
         /* Color Overrides for Pack Levels */
-        .theo-level-colored, 
-        .theo-level-colored *, 
+        .theo-level-colored,
+        .theo-level-colored *,
         .theo-level-colored img {
             filter: none !important;
             -webkit-filter: none !important;
             opacity: 1 !important;
         }
-        
+
         .theo-pack-level-incomplete { filter: grayscale(100%) !important; opacity: 1 !important; transition: filter 0.2s ease-in-out; }
         .theo-hide-native-counter { display: none !important; }
     `;
@@ -324,13 +325,13 @@
                 }
             });
         });
-        
+
         earnedPacks.sort((a, b) => b.points - a.points);
         return { earnedPacks, totalPoints };
     }
 
     async function getNationalRoster(countryId) {
-        const cId = countryId || 203; // Fallback to Czech Republic
+        const cId = countryId || 203; 
         const cacheKey = `aredl_roster_${cId}_ttl`;
         const cached = getTTLCache(cacheKey);
         if (cached) return cached;
@@ -606,14 +607,23 @@
                     <input type="text" id="tm-name" value="${isEditing ? editRecord.name : ''}" placeholder="Type to search levels..." autocomplete="off">
                     <div id="tm-autocomplete" class="theo-autocomplete-list"></div>
                 </div>
-                <div class="theo-input-group">
-                    <label>Your Completion Video</label>
-                    <input type="text" id="tm-my-yt" value="${isEditing ? (editRecord.yt || '') : ''}" placeholder="https://youtube.com/watch?v=...">
+                
+                <div style="display:flex; gap: 10px;">
+                    <div class="theo-input-group" style="flex: 2;">
+                        <label>Your Completion Video</label>
+                        <input type="text" id="tm-my-yt" value="${isEditing ? (editRecord.yt || '') : ''}" placeholder="https://youtube.com/watch?v=...">
+                    </div>
+                    <div class="theo-input-group" style="flex: 1;">
+                        <label>Date</label>
+                        <input type="date" id="tm-date" value="${isEditing ? (editRecord.date_raw || '') : ''}">
+                    </div>
                 </div>
+
                 <label class="theo-checkbox-group">
                     <input type="checkbox" id="tm-hidden" ${isEditing && editRecord.hidden ? 'checked' : ''}>
                     <span>Hide from Profile View (Still counts for Packs)</span>
                 </label>
+                
                 ${!isEditing && hiddenRecords.length > 0 ? `
                     <div id="tm-hidden-list-section" style="border-top:1px solid #333; padding-top:10px; margin-top:4px;">
                         <label style="color:#ff9800;">Currently Hidden Levels (${hiddenRecords.length}):</label>
@@ -695,12 +705,29 @@
         document.getElementById('tm-cancel').onclick = () => overlay.remove();
         document.getElementById('tm-save').onclick = () => {
             const myYt = document.getElementById('tm-my-yt').value.trim();
+            const dateRaw = document.getElementById('tm-date').value;
             const isHidden = document.getElementById('tm-hidden').checked;
             const current = getCustomRecords();
+            
+            // Format custom date
+            let formattedDate = 'Local';
+            if (dateRaw) {
+                const [y, m, d] = dateRaw.split('-');
+                formattedDate = `${parseInt(m)}/${parseInt(d)}/${y}`;
+            } else {
+                const today = new Date();
+                formattedDate = `${today.getMonth() + 1}/${today.getDate()}/${today.getFullYear()}`;
+            }
 
             if (isEditing) {
                 const target = current.find(r => r.name === editRecord.name);
-                if (target) { target.yt = myYt; target.hidden = isHidden; saveCustomRecords(current); }
+                if (target) { 
+                    target.yt = myYt; 
+                    target.hidden = isHidden; 
+                    target.date = formattedDate;
+                    target.date_raw = dateRaw || '';
+                    saveCustomRecords(current); 
+                }
             } else {
                 const inputName = nameInput.value.trim();
                 if (!inputName) return alert("Please enter a level name.");
@@ -709,8 +736,14 @@
                 if (current.some(r => cleanString(r.name) === cleanString(matchedLevel.name))) return alert(`You already added ${matchedLevel.name} to your theoretical list!`);
 
                 current.push({
-                    name: matchedLevel.name, rank: matchedLevel.position, points: matchedLevel.points / 10,
-                    level_id: matchedLevel.level_id, yt: myYt, hidden: isHidden
+                    name: matchedLevel.name, 
+                    rank: matchedLevel.position, 
+                    points: matchedLevel.points / 10,
+                    level_id: matchedLevel.level_id, 
+                    yt: myYt, 
+                    hidden: isHidden,
+                    date: formattedDate,
+                    date_raw: dateRaw || ''
                 });
                 saveCustomRecords(current);
             }
@@ -963,24 +996,38 @@
             let tName = templateData.name;
             const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null, false);
             let node;
+            
+            // Unchained string replacement so Points and Date can be replaced on the exact same line of text
             while ((node = walker.nextNode())) {
                 let val = node.nodeValue;
+                let originalVal = val;
+
                 if (templateData.rank && val.includes(templateData.rank)) {
-                    node.nodeValue = val.replace(templateData.rank, `#${rec.rank}`);
-                } else if (tName && val.includes(tName)) {
-                    node.nodeValue = val.replace(tName, `${rec.name} `);
+                    val = val.replace(templateData.rank, `#${rec.rank}`);
+                } 
+                
+                if (tName && val.includes(tName)) {
+                    val = val.replace(tName, `${rec.name} `);
 
                     const badge = document.createElement('span');
                     badge.className = 'theo-universal-badge';
                     badge.textContent = '[Theo]';
                     node.parentElement.appendChild(badge);
 
-                    tName = null;
-                } else if (templateData.pointsStr && val.includes(templateData.pointsStr)) {
+                    tName = null; // Ensure badge is only placed once
+                } 
+                
+                if (templateData.pointsStr && val.includes(templateData.pointsStr)) {
                     const formattedPoints = parseFloat(rec.points).toFixed(1);
-                    node.nodeValue = val.replace(templateData.pointsStr, `+${formattedPoints} points`);
-                } else if (val.match(/\d{1,2}\/\d{1,2}\/\d{4}/)) {
-                    node.nodeValue = val.replace(/\d{1,2}\/\d{1,2}\/\d{4}/, 'Local');
+                    val = val.replace(templateData.pointsStr, `+${formattedPoints} points`);
+                } 
+                
+                if (val.match(/\d{1,2}\/\d{1,2}\/\d{4}/)) {
+                    val = val.replace(/\d{1,2}\/\d{1,2}\/\d{4}/, rec.date || 'Local');
+                }
+
+                if (val !== originalVal) {
+                    node.nodeValue = val;
                 }
             }
 
