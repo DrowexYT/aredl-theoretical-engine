@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         AREDL Theoretical Profile & Pack Engine (V1.1 Public Release)
+// @name         AREDL Theoretical Profile & Pack Engine (V1.6 Public Release)
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      1.6
 // @description  Client-side progression sandbox for AREDL. Enables theoretical level completions, dynamic pack evaluation, point calculations, live leaderboard estimations, auto-syncing list placements, and custom completion dates.
 // @author       Drowex
 // @match        https://aredl.net/*
@@ -72,19 +72,17 @@
 
         records.forEach(rec => {
             const cleanRecName = cleanString(rec.name);
-            
-            // STRICT ID MATCHING FIX: Prevents name collisions
             const apiMatch = apiData.find(l => {
                 if (rec.level_id && l.level_id) {
                     return String(l.level_id) === String(rec.level_id);
                 }
                 return cleanString(l.name) === cleanRecName;
             });
-            
+
             if (apiMatch) {
                 const newRank = apiMatch.position;
                 const newPoints = apiMatch.points / 10;
-                
+
                 if (rec.rank !== newRank || rec.points !== newPoints) {
                     rec.rank = newRank;
                     rec.points = newPoints;
@@ -96,18 +94,13 @@
         if (changed) {
             saveCustomRecords(records);
             if (isMyProfilePage() && !window.location.search.includes('tab=packs')) {
-                render(); // Instantly refresh UI if you are viewing your profile
+                render();
             }
         }
     }
 
-    function getLegitCompletions() { return GM_getValue('aredl_legit_completions_v1', ['bloodbath', 'conical depression', 'the ultimate demon', 'cataclysm']); }
+    function getLegitCompletions() { return GM_getValue('aredl_legit_completions_v1', []); }
     function saveLegitCompletions(list) { GM_setValue('aredl_legit_completions_v1', list); }
-
-    function getBaseHardest() {
-        return GM_getValue('aredl_base_hardest_v2', { globalRank: 11368, countryRank: 98, levelPosition: 832 });
-    }
-    function saveBaseHardest(data) { GM_setValue('aredl_base_hardest_v2', data); }
 
     function getTTLCache(key) {
         try {
@@ -150,7 +143,7 @@
             z-index: 100000; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px);
         }
         .theo-modal {
-            background: #1a1c23; border: 1px solid #ff9800; border-radius: 10px; padding: 24px; width: 440px; 
+            background: #1a1c23; border: 1px solid #ff9800; border-radius: 10px; padding: 24px; width: 440px;
             display: flex; flex-direction: column; gap: 14px; box-shadow: 0 10px 30px rgba(255, 152, 0, 0.2); font-family: sans-serif; color: white;
         }
         .theo-input-group { display: flex; flex-direction: column; gap: 6px; position: relative; }
@@ -172,7 +165,7 @@
         .theo-modal-btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
         .theo-btn-cancel { background: transparent; border: 1px solid #666; color: #ccc; padding: 8px 18px; border-radius: 6px; cursor: pointer; font-weight: 600; }
         .theo-btn-save { background: #ff9800; border: none; color: #000; font-weight: bold; padding: 8px 18px; border-radius: 6px; cursor: pointer; }
-        
+
         .theo-menu-container { position: absolute; top: 10px; left: 10px; z-index: 200; font-family: sans-serif; }
         .theo-menu-btn { background: rgba(0, 0, 0, 0.6); color: #fff; border: 1px solid rgba(255, 152, 0, 0.4); border-radius: 4px; width: 26px; height: 26px; font-size: 14px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
         .theo-menu-btn:hover { background: #ff9800; color: #000; border-color: #ff9800; }
@@ -275,7 +268,6 @@
         } catch (e) { return null; }
     }
 
-    // Fetches the active player's metadata (country, baseline stats) dynamically
     async function fetchActiveUserData() {
         const username = getTargetUsername();
         const cacheKey = `aredl_user_meta_${cleanString(username)}`;
@@ -331,7 +323,7 @@
     }
 
     async function getNationalRoster(countryId) {
-        const cId = countryId || 203; 
+        const cId = countryId || 203;
         const cacheKey = `aredl_roster_${cId}_ttl`;
         const cached = getTTLCache(cacheKey);
         if (cached) return cached;
@@ -360,8 +352,10 @@
 
     async function getExactNationalRanks(targetPtsRaw, targetPtsTotal, targetExtremes, theoreticalBestPosition, countryId) {
         const roster = await getNationalRoster(countryId);
-        const base = getBaseHardest();
-        if (!roster || roster.length === 0) return { raw: null, total: null, extremes: null, hardest: base.countryRank };
+        const baseStats = GM_getValue('aredl_base_stats_v2', { hardestNational: 999999 });
+        let calculatedHardest = baseStats.hardestNational;
+
+        if (!roster || roster.length === 0) return { raw: null, total: null, extremes: null, hardest: calculatedHardest };
 
         const targetScaledRaw = Math.round(targetPtsRaw * 10);
         const targetScaledTotal = Math.round(targetPtsTotal * 10);
@@ -378,8 +372,7 @@
             if (playerExtremes > targetExtremes) strictlyHigherExtremes++;
         }
 
-        let calculatedHardest = base.countryRank;
-        if (theoreticalBestPosition < base.levelPosition) {
+        if (theoreticalBestPosition < 999999) {
             const allLevels = await fetchAredlApi();
             if (allLevels) {
                 const levelPosMap = new Map();
@@ -387,7 +380,9 @@
                 let higherHardestCount = 0;
                 for (let p of roster) {
                     let pLevelPos = 999999;
-                    if (p.hardest && p.hardest.level_id && levelPosMap.has(p.hardest.level_id)) pLevelPos = levelPosMap.get(p.hardest.level_id);
+                    if (p.hardest && p.hardest.level_id && levelPosMap.has(p.hardest.level_id)) {
+                        pLevelPos = levelPosMap.get(p.hardest.level_id);
+                    }
                     if (pLevelPos < theoreticalBestPosition) higherHardestCount++;
                 }
                 calculatedHardest = higherHardestCount + 1;
@@ -475,14 +470,15 @@
     }
 
     async function findGlobalHardestRank(theoreticalBestPosition) {
-        const base = getBaseHardest();
-        if (theoreticalBestPosition >= base.levelPosition) return base.globalRank;
+        const baseStats = GM_getValue('aredl_base_stats_v2', { hardestGlobal: 999999 });
+        if (theoreticalBestPosition === 999999) return baseStats.hardestGlobal;
+
         const cacheKey = `theo_global_hrd_${theoreticalBestPosition}`;
         const cached = getTTLCache(cacheKey);
         if (cached) return cached;
         try {
             const baseUrl = `${LB_API_BASE}?per_page=20&name_filter=%25%25&order=Hardest`;
-            let low = 1, high = 600, bestRank = base.globalRank, iterations = 0;
+            let low = 1, high = 600, bestRank = baseStats.hardestGlobal, iterations = 0;
             const allLevels = await fetchAredlApi();
             const levelPosMap = new Map();
             if (allLevels) allLevels.forEach(l => { if (l.level_id) levelPosMap.set(l.level_id, l.position); });
@@ -519,7 +515,7 @@
             }
             setTTLCache(cacheKey, bestRank);
             return bestRank;
-        } catch (e) { return base.globalRank; }
+        } catch (e) { return baseStats.hardestGlobal; }
     }
 
     function findTemplateCard() {
@@ -596,7 +592,6 @@
                     <h3 style="margin:0; color:#ff9800; font-size:18px;">${isEditing ? 'Edit Theoretical Record' : 'Add Theoretical Record'}</h3>
                 </div>
 
-                <!-- Quick User Profile Configurator -->
                 <div style="display:flex; justify-content:space-between; align-items:center; background:#20232c; border:1px solid #333; padding:8px 12px; border-radius:6px; font-size:12px;">
                     <span>Active Profile: <strong style="color:#ff9800;">${getTargetUsername()}</strong></span>
                     <button id="tm-change-user-btn" style="background:transparent; border:1px solid #ff9800; color:#ff9800; border-radius:4px; padding:2px 8px; cursor:pointer; font-weight:bold; font-size:11px;">Change</button>
@@ -607,7 +602,7 @@
                     <input type="text" id="tm-name" value="${isEditing ? editRecord.name : ''}" placeholder="Type to search levels..." autocomplete="off">
                     <div id="tm-autocomplete" class="theo-autocomplete-list"></div>
                 </div>
-                
+
                 <div style="display:flex; gap: 10px;">
                     <div class="theo-input-group" style="flex: 2;">
                         <label>Your Completion Video</label>
@@ -623,7 +618,7 @@
                     <input type="checkbox" id="tm-hidden" ${isEditing && editRecord.hidden ? 'checked' : ''}>
                     <span>Hide from Profile View (Still counts for Packs)</span>
                 </label>
-                
+
                 ${!isEditing && hiddenRecords.length > 0 ? `
                     <div id="tm-hidden-list-section" style="border-top:1px solid #333; padding-top:10px; margin-top:4px;">
                         <label style="color:#ff9800;">Currently Hidden Levels (${hiddenRecords.length}):</label>
@@ -708,8 +703,7 @@
             const dateRaw = document.getElementById('tm-date').value;
             const isHidden = document.getElementById('tm-hidden').checked;
             const current = getCustomRecords();
-            
-            // Format custom date
+
             let formattedDate = 'Local';
             if (dateRaw) {
                 const [y, m, d] = dateRaw.split('-');
@@ -721,12 +715,12 @@
 
             if (isEditing) {
                 const target = current.find(r => r.name === editRecord.name);
-                if (target) { 
-                    target.yt = myYt; 
-                    target.hidden = isHidden; 
+                if (target) {
+                    target.yt = myYt;
+                    target.hidden = isHidden;
                     target.date = formattedDate;
                     target.date_raw = dateRaw || '';
-                    saveCustomRecords(current); 
+                    saveCustomRecords(current);
                 }
             } else {
                 const inputName = nameInput.value.trim();
@@ -736,11 +730,11 @@
                 if (current.some(r => cleanString(r.name) === cleanString(matchedLevel.name))) return alert(`You already added ${matchedLevel.name} to your theoretical list!`);
 
                 current.push({
-                    name: matchedLevel.name, 
-                    rank: matchedLevel.position, 
+                    name: matchedLevel.name,
+                    rank: matchedLevel.position,
                     points: matchedLevel.points / 10,
-                    level_id: matchedLevel.level_id, 
-                    yt: myYt, 
+                    level_id: matchedLevel.level_id,
+                    yt: myYt,
                     hidden: isHidden,
                     date: formattedDate,
                     date_raw: dateRaw || ''
@@ -753,172 +747,202 @@
         };
     }
 
+    // STATE LOCKS to completely prevent API rate limiting from DOM mutations
+    let profileStatsUpdating = false;
+    let isRendering = false;
+
     async function updateProfileStats(totalTheoPoints, theoCount) {
-        if (!isMyProfilePage()) return;
-        const { earnedPacks, totalPoints: autoPackPoints } = await evaluateCompletedPacks();
+        if (!isMyProfilePage() || profileStatsUpdating) return;
+        profileStatsUpdating = true;
 
-        let currentBasePts = 81.0;
-        let baseExtremes = 4;
-        const legitNames = new Set();
-        document.querySelectorAll('div').forEach(card => {
-            let t = card.textContent;
-            if (t.includes('#') && t.includes('points') && !card.classList.contains('theo-clone')) {
-                const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT, null, false);
-                let node; let longest = "";
-                while ((node = walker.nextNode())) {
-                    let val = node.nodeValue.trim();
-                    if (val.length > 2 && !val.match(/#\d+/) && !val.includes('points') && !val.includes('/') && val.length > longest.length) longest = val;
-                }
-                if (longest) legitNames.add(cleanString(longest));
-            }
-        });
-        if (legitNames.size > 0) saveLegitCompletions(Array.from(legitNames));
+        try {
+            const { earnedPacks, totalPoints: autoPackPoints } = await evaluateCompletedPacks();
 
-        const pTags = document.querySelectorAll('p');
-        pTags.forEach(p => {
-            const text = p.textContent.trim().toUpperCase();
-            if (text === 'LEVEL POINTS' || text === 'TOTAL POINTS' || text === 'PACK POINTS') {
-                const span = p.nextElementSibling;
-                if (span && span.tagName === 'SPAN') {
-                    const targetEl = span.querySelector('button') || span;
-                    if (!targetEl.hasAttribute('data-original-pts')) {
-                        const cleanText = targetEl.textContent.replace(/,/g, '');
-                        const numMatch = cleanText.match(/[\d.]+/);
-                        targetEl.setAttribute('data-original-pts', numMatch ? numMatch[0] : (text === 'PACK POINTS' ? '0' : '81.0'));
+            // 1. SILENT DOM EXTRACTION: Fetch all official base stats directly from the profile without API calls
+            let currentBasePts = 0;
+            let baseExtremes = 0;
+            let origPackPts = 0;
+            const legitNames = new Set();
+
+            document.querySelectorAll('div').forEach(card => {
+                let t = card.textContent;
+                if (t.includes('#') && t.includes('points') && !card.classList.contains('theo-clone')) {
+                    const walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT, null, false);
+                    let node; let longest = "";
+                    while ((node = walker.nextNode())) {
+                        let val = node.nodeValue.trim();
+                        if (val.length > 2 && !val.match(/#\d+/) && !val.includes('points') && !val.includes('/') && val.length > longest.length) longest = val;
                     }
-                    const originalPts = parseFloat(targetEl.getAttribute('data-original-pts'));
-                    if (!isNaN(originalPts)) {
-                        if (text === 'LEVEL POINTS') currentBasePts = originalPts;
-                        let addedVal = 0;
-                        if (text === 'LEVEL POINTS') addedVal = totalTheoPoints;
-                        else if (text === 'PACK POINTS') addedVal = autoPackPoints;
-                        else if (text === 'TOTAL POINTS') addedVal = totalTheoPoints + autoPackPoints;
+                    if (longest) legitNames.add(cleanString(longest));
+                }
+            });
+            if (legitNames.size > 0) saveLegitCompletions(Array.from(legitNames));
 
-                        if (addedVal > 0) {
-                            const combinedTotal = (originalPts + addedVal).toFixed(1);
-                            targetEl.textContent = `${combinedTotal} (${originalPts > 0 ? originalPts : '-'})`;
-                            targetEl.style.color = '#ff9800';
-                            targetEl.style.whiteSpace = 'nowrap';
-                        } else {
-                            targetEl.textContent = originalPts > 0 ? originalPts : '-';
-                            targetEl.style.color = '';
+            const pTags = document.querySelectorAll('p');
+            pTags.forEach(p => {
+                const text = p.textContent.trim().toUpperCase();
+                if (text === 'LEVEL POINTS' || text === 'TOTAL POINTS' || text === 'PACK POINTS') {
+                    const span = p.nextElementSibling;
+                    if (span && span.tagName === 'SPAN') {
+                        const targetEl = span.querySelector('button') || span;
+                        if (!targetEl.hasAttribute('data-original-pts')) {
+                            const cleanText = targetEl.textContent.replace(/,/g, '');
+                            const numMatch = cleanText.match(/[\d.]+/);
+                            targetEl.setAttribute('data-original-pts', numMatch ? numMatch[0] : '0');
+                        }
+                        const originalPts = parseFloat(targetEl.getAttribute('data-original-pts'));
+                        if (!isNaN(originalPts)) {
+                            if (text === 'LEVEL POINTS') currentBasePts = originalPts;
+                            if (text === 'PACK POINTS') origPackPts = originalPts;
+
+                            let addedVal = 0;
+                            if (text === 'LEVEL POINTS') addedVal = totalTheoPoints;
+                            else if (text === 'PACK POINTS') addedVal = autoPackPoints;
+                            else if (text === 'TOTAL POINTS') addedVal = totalTheoPoints + autoPackPoints;
+
+                            if (addedVal > 0) {
+                                const combinedTotal = (originalPts + addedVal).toFixed(1);
+                                targetEl.textContent = `${combinedTotal} (${originalPts > 0 ? originalPts : '-'})`;
+                                targetEl.style.color = '#ff9800';
+                                targetEl.style.whiteSpace = 'nowrap';
+                            } else {
+                                targetEl.textContent = originalPts > 0 ? originalPts : '-';
+                                targetEl.style.color = '';
+                            }
                         }
                     }
                 }
-            }
-        });
+            });
 
-        const allDivs = document.querySelectorAll('div, span, h2, h3');
-        allDivs.forEach(el => {
-            if (el.children.length === 0) {
-                let txt = el.textContent.trim();
-                if (/^COMPLETED\s*\(.*\)$/i.test(txt)) {
-                    if (!el.hasAttribute('data-original-count')) {
-                        const m = txt.match(/\d+/);
-                        el.setAttribute('data-original-count', m ? m[0] : '4');
+            const allDivs = document.querySelectorAll('div, span, h2, h3');
+            allDivs.forEach(el => {
+                if (el.children.length === 0) {
+                    let txt = el.textContent.trim();
+                    if (/^COMPLETED\s*\(.*\)$/i.test(txt)) {
+                        if (!el.hasAttribute('data-original-count')) {
+                            const m = txt.match(/\d+/);
+                            el.setAttribute('data-original-count', m ? m[0] : '0');
+                        }
+                        const orig = parseInt(el.getAttribute('data-original-count'), 10);
+                        if (!isNaN(orig)) {
+                            baseExtremes = orig;
+                            el.textContent = `COMPLETED (${orig + theoCount} [${orig}])`;
+                            el.style.color = '#ff9800';
+                        }
                     }
-                    const orig = parseInt(el.getAttribute('data-original-count'), 10);
-                    if (!isNaN(orig)) {
-                        baseExtremes = orig;
-                        el.textContent = `COMPLETED (${orig + theoCount} [${orig}])`;
-                        el.style.color = '#ff9800';
+                    else if (/^CLASSIC\s*\(.*\)$/i.test(txt)) {
+                        if (!el.hasAttribute('data-original-classic')) {
+                            const m = txt.match(/\d+/);
+                            el.setAttribute('data-original-classic', m ? m[0] : '0');
+                        }
+                        const origClassic = parseInt(el.getAttribute('data-original-classic'), 10);
+                        if (!isNaN(origClassic)) {
+                            el.textContent = `CLASSIC (${origClassic + theoCount} [${origClassic}])`;
+                            el.style.color = '#ff9800';
+                        }
+                    }
+                    else if (/^PACKS\s*\(.*\)$/i.test(txt)) {
+                        if (!el.hasAttribute('data-original-packs')) {
+                            const m = txt.match(/\d+/);
+                            el.setAttribute('data-original-packs', m ? m[0] : '0');
+                        }
+                        const origPacks = parseInt(el.getAttribute('data-original-packs'), 10);
+                        if (!isNaN(origPacks)) {
+                            el.textContent = `PACKS (${origPacks + earnedPacks.length} [${origPacks}])`;
+                            el.style.color = '#ff9800';
+                        }
                     }
                 }
-                else if (/^CLASSIC\s*\(.*\)$/i.test(txt)) {
-                    if (!el.hasAttribute('data-original-classic')) {
-                        const m = txt.match(/\d+/);
-                        el.setAttribute('data-original-classic', m ? m[0] : '4');
+            });
+
+            let baseCountry = 203;
+            const flagImg = document.querySelector('img[src*="/flags/"]');
+            if (flagImg) {
+                const match = flagImg.src.match(/\/flags\/(\d+)\./);
+                if (match) baseCountry = parseInt(match[1], 10);
+            }
+
+            let baseHardestGlobal = 999999;
+            let baseHardestNational = 999999;
+            const hrdRankRows = Array.from(document.querySelectorAll('span, p')).filter(el => el.textContent.trim().toUpperCase() === 'HARDEST LEVEL RANK');
+            if (hrdRankRows.length >= 2) {
+                const gRow = hrdRankRows[0].parentElement?.querySelector('span:last-child, p:last-child');
+                const cRow = hrdRankRows[1].parentElement?.querySelector('span:last-child, p:last-child');
+
+                if (gRow && !gRow.hasAttribute('data-original-rank')) gRow.setAttribute('data-original-rank', gRow.textContent.match(/#\d+/)?.[0] || '');
+                if (cRow && !cRow.hasAttribute('data-original-rank')) cRow.setAttribute('data-original-rank', cRow.textContent.match(/#\d+/)?.[0] || '');
+
+                const gMatch = gRow?.getAttribute('data-original-rank')?.match(/#(\d+)/);
+                const cMatch = cRow?.getAttribute('data-original-rank')?.match(/#(\d+)/);
+                if (gMatch) baseHardestGlobal = parseInt(gMatch[1], 10);
+                if (cMatch) baseHardestNational = parseInt(cMatch[1], 10);
+            }
+
+            // Save Base Stats instantly to completely eliminate Leaderboard API lag
+            GM_setValue('aredl_base_stats_v2', {
+                levelPts: currentBasePts,
+                packPts: origPackPts,
+                extremes: baseExtremes,
+                country: baseCountry,
+                hardestGlobal: baseHardestGlobal,
+                hardestNational: baseHardestNational
+            });
+
+            let bestTheoreticalPosition = 999999;
+            const visibleRecords = getCustomRecords().filter(r => !r.hidden);
+            visibleRecords.forEach(r => {
+                const rPos = parseInt(r.rank, 10);
+                if (!isNaN(rPos) && rPos < bestTheoreticalPosition) bestTheoreticalPosition = rPos;
+            });
+
+            const finalExtremesTotal = baseExtremes + theoCount;
+            const finalPtsRaw = currentBasePts + totalTheoPoints;
+            const finalPtsTotal = currentBasePts + totalTheoPoints + autoPackPoints;
+
+            const [natRanks, theoGlobalRaw, theoGlobalTotal, theoGlobalExtremes, theoGlobalHardest] = await Promise.all([
+                getExactNationalRanks(finalPtsRaw, finalPtsTotal, finalExtremesTotal, bestTheoreticalPosition, baseCountry),
+                findGlobalPointsRank(finalPtsRaw, false),
+                findGlobalPointsRank(finalPtsTotal, true),
+                findGlobalExtremesRank(finalExtremesTotal),
+                findGlobalHardestRank(bestTheoreticalPosition)
+            ]);
+
+            const rawRankRows = Array.from(document.querySelectorAll('span, p')).filter(el => el.textContent.trim().toUpperCase() === 'POINTS RANK');
+            const packRankRows = Array.from(document.querySelectorAll('span, p')).filter(el => el.textContent.trim().toUpperCase() === 'POINTS RANK (WITH PACKS)');
+            const extRankRows = Array.from(document.querySelectorAll('span, p')).filter(el => el.textContent.trim().toUpperCase() === 'EXTREMES COUNT RANK');
+
+            const applyRank = (labelEl, newRankVal) => {
+                if (!labelEl || !newRankVal) return;
+                const row = labelEl.parentElement;
+                if (!row) return;
+
+                const rankValEl = row.querySelector('span:last-child, p:last-child');
+                if (rankValEl && rankValEl !== labelEl) {
+                    if (!rankValEl.hasAttribute('data-original-rank')) {
+                        const m = rankValEl.textContent.match(/#\d+/);
+                        if (m) rankValEl.setAttribute('data-original-rank', m[0]);
                     }
-                    const origClassic = parseInt(el.getAttribute('data-original-classic'), 10);
-                    if (!isNaN(origClassic)) {
-                        el.textContent = `CLASSIC (${origClassic + theoCount} [${origClassic}])`;
-                        el.style.color = '#ff9800';
+                    const origRank = rankValEl.getAttribute('data-original-rank');
+                    if (origRank) {
+                        rankValEl.textContent = `#${newRankVal} (${origRank})`;
+                        rankValEl.style.color = '#ff9800';
+                        rankValEl.style.whiteSpace = 'nowrap';
                     }
                 }
-                else if (/^PACKS\s*\(.*\)$/i.test(txt)) {
-                    if (!el.hasAttribute('data-original-packs')) {
-                        const m = txt.match(/\d+/);
-                        el.setAttribute('data-original-packs', m ? m[0] : '0');
-                    }
-                    const origPacks = parseInt(el.getAttribute('data-original-packs'), 10);
-                    if (!isNaN(origPacks)) {
-                        el.textContent = `PACKS (${origPacks + earnedPacks.length} [${origPacks}])`;
-                        el.style.color = '#ff9800';
-                    }
-                }
-            }
-        });
+            };
 
-        let bestTheoreticalPosition = 999999;
-        const visibleRecords = getCustomRecords().filter(r => !r.hidden);
-        visibleRecords.forEach(r => {
-            const rPos = parseInt(r.rank, 10);
-            if (!isNaN(rPos) && rPos < bestTheoreticalPosition) bestTheoreticalPosition = rPos;
-        });
+            if (rawRankRows[0]) applyRank(rawRankRows[0], theoGlobalRaw);
+            if (packRankRows[0]) applyRank(packRankRows[0], theoGlobalTotal);
+            if (extRankRows[0]) applyRank(extRankRows[0], theoGlobalExtremes);
+            if (hrdRankRows[0]) applyRank(hrdRankRows[0], theoGlobalHardest);
+            if (rawRankRows[1]) applyRank(rawRankRows[1], natRanks.raw);
+            if (packRankRows[1]) applyRank(packRankRows[1], natRanks.total);
+            if (extRankRows[1]) applyRank(extRankRows[1], natRanks.extremes);
+            if (hrdRankRows[1]) applyRank(hrdRankRows[1], natRanks.hardest);
 
-        const hrdRankRows = Array.from(document.querySelectorAll('span, p')).filter(el => el.textContent.trim().toUpperCase() === 'HARDEST LEVEL RANK');
-        if (hrdRankRows.length >= 2) {
-            const gRow = hrdRankRows[0].parentElement?.querySelector('span:last-child, p:last-child');
-            const cRow = hrdRankRows[1].parentElement?.querySelector('span:last-child, p:last-child');
-            const gMatch = gRow?.textContent.match(/#(\d+)/);
-            const cMatch = cRow?.textContent.match(/#(\d+)/);
-            if (gMatch && cMatch) {
-                saveBaseHardest({
-                    globalRank: parseInt(gMatch[1], 10),
-                    countryRank: parseInt(cMatch[1], 10),
-                    levelPosition: 832
-                });
-            }
+        } finally {
+            profileStatsUpdating = false;
         }
-
-        const finalExtremesTotal = baseExtremes + theoCount;
-        const finalPtsRaw = currentBasePts + totalTheoPoints;
-        const finalPtsTotal = currentBasePts + totalTheoPoints + autoPackPoints;
-
-        // Auto-detect player metadata for exact national leaderboard calculations
-        const userMeta = await fetchActiveUserData();
-        const countryId = userMeta?.country?.id || 203;
-
-        const [natRanks, theoGlobalRaw, theoGlobalTotal, theoGlobalExtremes, theoGlobalHardest] = await Promise.all([
-            getExactNationalRanks(finalPtsRaw, finalPtsTotal, finalExtremesTotal, bestTheoreticalPosition, countryId),
-            findGlobalPointsRank(finalPtsRaw, false),
-            findGlobalPointsRank(finalPtsTotal, true),
-            findGlobalExtremesRank(finalExtremesTotal),
-            findGlobalHardestRank(bestTheoreticalPosition)
-        ]);
-
-        const rawRankRows = Array.from(document.querySelectorAll('span, p')).filter(el => el.textContent.trim().toUpperCase() === 'POINTS RANK');
-        const packRankRows = Array.from(document.querySelectorAll('span, p')).filter(el => el.textContent.trim().toUpperCase() === 'POINTS RANK (WITH PACKS)');
-        const extRankRows = Array.from(document.querySelectorAll('span, p')).filter(el => el.textContent.trim().toUpperCase() === 'EXTREMES COUNT RANK');
-
-        const applyRank = (labelEl, newRankVal) => {
-            if (!labelEl || !newRankVal) return;
-            const row = labelEl.parentElement;
-            if (!row) return;
-
-            const rankValEl = row.querySelector('span:last-child, p:last-child');
-            if (rankValEl && rankValEl !== labelEl) {
-                if (!rankValEl.hasAttribute('data-original-rank')) {
-                    const m = rankValEl.textContent.match(/#\d+/);
-                    if (m) rankValEl.setAttribute('data-original-rank', m[0]);
-                }
-                const origRank = rankValEl.getAttribute('data-original-rank');
-                if (origRank) {
-                    rankValEl.textContent = `#${newRankVal} (${origRank})`;
-                    rankValEl.style.color = '#ff9800';
-                    rankValEl.style.whiteSpace = 'nowrap';
-                }
-            }
-        };
-
-        if (rawRankRows[0]) applyRank(rawRankRows[0], theoGlobalRaw);
-        if (packRankRows[0]) applyRank(packRankRows[0], theoGlobalTotal);
-        if (extRankRows[0]) applyRank(extRankRows[0], theoGlobalExtremes);
-        if (hrdRankRows[0]) applyRank(hrdRankRows[0], theoGlobalHardest);
-        if (rawRankRows[1]) applyRank(rawRankRows[1], natRanks.raw);
-        if (packRankRows[1]) applyRank(packRankRows[1], natRanks.total);
-        if (extRankRows[1]) applyRank(extRankRows[1], natRanks.extremes);
-        if (hrdRankRows[1]) applyRank(hrdRankRows[1], natRanks.hardest);
     }
 
     let globalDropdown = document.getElementById('theo-global-dropdown');
@@ -930,181 +954,186 @@
     }
 
     function render() {
-        if (!isMyProfilePage()) return;
-        const target = findTemplateCard();
-        if (!target) return;
-        const { card: templateCard, listContainer } = target;
+        if (!isMyProfilePage() || isRendering) return;
+        isRendering = true;
 
-        listContainer.classList.add('aredl-forced-flex');
+        try {
+            const target = findTemplateCard();
+            if (!target) return;
+            const { card: templateCard, listContainer } = target;
 
-        if (!document.getElementById('theo-fab')) {
-            const fab = document.createElement('button');
-            fab.id = 'theo-fab';
-            fab.className = 'aredl-fab';
-            fab.innerHTML = `+ ADD THEORETICAL DEMON <span id="theo-pts-fab" class="theo-pts-badge" style="display:none;"></span>`;
-            fab.onclick = () => openModal(null);
-            document.body.appendChild(fab);
-        }
+            listContainer.classList.add('aredl-forced-flex');
 
-        document.querySelectorAll('.theo-clone').forEach(el => el.remove());
-
-        const templateData = extractTemplateData(templateCard);
-        const allRecords = getCustomRecords();
-        const visibleRecords = allRecords.filter(r => !r.hidden);
-
-        let totalTheoPoints = 0;
-
-        visibleRecords.forEach(rec => {
-            totalTheoPoints += parseFloat(rec.points || 0);
-            const clone = templateCard.cloneNode(true);
-            clone.id = '';
-            clone.querySelectorAll('*').forEach(el => el.id = '');
-            clone.className = templateCard.className + ' theo-clone';
-
-            clone.style.setProperty('position', 'relative', 'important');
-            clone.style.setProperty('transform', 'none', 'important');
-            clone.style.setProperty('z-index', '1', 'important');
-            clone.style.setProperty('order', rec.rank, 'important');
-            clone.style.setProperty('cursor', 'pointer', 'important');
-
-            if (rec.level_id) {
-                clone.onclick = (e) => {
-                    if (e.target.closest('a') || e.target.closest('.theo-menu-container') || e.target.closest('.theo-global-dropdown')) return;
-                    window.location.href = `https://aredl.net/list/${rec.level_id}`;
-                };
+            if (!document.getElementById('theo-fab')) {
+                const fab = document.createElement('button');
+                fab.id = 'theo-fab';
+                fab.className = 'aredl-fab';
+                fab.innerHTML = `+ ADD THEORETICAL DEMON <span id="theo-pts-fab" class="theo-pts-badge" style="display:none;"></span>`;
+                fab.onclick = () => openModal(null);
+                document.body.appendChild(fab);
             }
 
-            const visualInner = clone.querySelector('a[href*="youtu"]')?.closest('div[style*="background"]');
-            if (visualInner) {
-                visualInner.style.border = '1px dashed #ff9800';
-                visualInner.style.boxShadow = 'inset 0 0 15px rgba(255, 152, 0, 0.15)';
-            } else {
-                clone.style.border = '1px dashed #ff9800';
-            }
+            document.querySelectorAll('.theo-clone').forEach(el => el.remove());
 
-            if (rec.level_id) {
-                const thumbUrl = `${BANNER_BASE_URL}${rec.level_id}.webp`;
-                const imgs = clone.querySelectorAll('img');
-                if (imgs.length > 0) {
-                    imgs[0].removeAttribute('srcset');
-                    imgs[0].removeAttribute('sizes');
-                    imgs[0].src = thumbUrl;
-                    imgs[0].style.setProperty('object-fit', 'cover', 'important');
-                }
-            }
+            const templateData = extractTemplateData(templateCard);
+            const allRecords = getCustomRecords();
+            const visibleRecords = allRecords.filter(r => !r.hidden);
 
-            let tName = templateData.name;
-            const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null, false);
-            let node;
-            
-            // Unchained string replacement so Points and Date can be replaced on the exact same line of text
-            while ((node = walker.nextNode())) {
-                let val = node.nodeValue;
-                let originalVal = val;
+            let totalTheoPoints = 0;
 
-                if (templateData.rank && val.includes(templateData.rank)) {
-                    val = val.replace(templateData.rank, `#${rec.rank}`);
-                } 
-                
-                if (tName && val.includes(tName)) {
-                    val = val.replace(tName, `${rec.name} `);
+            visibleRecords.forEach(rec => {
+                totalTheoPoints += parseFloat(rec.points || 0);
+                const clone = templateCard.cloneNode(true);
+                clone.id = '';
+                clone.querySelectorAll('*').forEach(el => el.id = '');
+                clone.className = templateCard.className + ' theo-clone';
 
-                    const badge = document.createElement('span');
-                    badge.className = 'theo-universal-badge';
-                    badge.textContent = '[Theo]';
-                    node.parentElement.appendChild(badge);
+                clone.style.setProperty('position', 'relative', 'important');
+                clone.style.setProperty('transform', 'none', 'important');
+                clone.style.setProperty('z-index', '1', 'important');
+                clone.style.setProperty('order', rec.rank, 'important');
+                clone.style.setProperty('cursor', 'pointer', 'important');
 
-                    tName = null; // Ensure badge is only placed once
-                } 
-                
-                if (templateData.pointsStr && val.includes(templateData.pointsStr)) {
-                    const formattedPoints = parseFloat(rec.points).toFixed(1);
-                    val = val.replace(templateData.pointsStr, `+${formattedPoints} points`);
-                } 
-                
-                if (val.match(/\d{1,2}\/\d{1,2}\/\d{4}/)) {
-                    val = val.replace(/\d{1,2}\/\d{1,2}\/\d{4}/, rec.date || 'Local');
+                if (rec.level_id) {
+                    clone.onclick = (e) => {
+                        if (e.target.closest('a') || e.target.closest('.theo-menu-container') || e.target.closest('.theo-global-dropdown')) return;
+                        window.location.href = `https://aredl.net/list/${rec.level_id}`;
+                    };
                 }
 
-                if (val !== originalVal) {
-                    node.nodeValue = val;
-                }
-            }
-
-            clone.querySelectorAll('a').forEach(a => {
-                if (a.href.includes('youtube') || a.href.includes('youtu.be')) {
-                    a.href = rec.yt || 'javascript:void(0)';
-                    a.target = '_blank';
-                    a.onclick = (e) => e.stopPropagation();
+                const visualInner = clone.querySelector('a[href*="youtu"]')?.closest('div[style*="background"]');
+                if (visualInner) {
+                    visualInner.style.border = '1px dashed #ff9800';
+                    visualInner.style.boxShadow = 'inset 0 0 15px rgba(255, 152, 0, 0.15)';
                 } else {
-                    a.href = 'javascript:void(0)';
-                    a.style.cursor = 'default';
+                    clone.style.border = '1px dashed #ff9800';
+                }
+
+                if (rec.level_id) {
+                    const thumbUrl = `${BANNER_BASE_URL}${rec.level_id}.webp`;
+                    const imgs = clone.querySelectorAll('img');
+                    if (imgs.length > 0) {
+                        imgs[0].removeAttribute('srcset');
+                        imgs[0].removeAttribute('sizes');
+                        imgs[0].src = thumbUrl;
+                        imgs[0].style.setProperty('object-fit', 'cover', 'important');
+                    }
+                }
+
+                let tName = templateData.name;
+                const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null, false);
+                let node;
+
+                while ((node = walker.nextNode())) {
+                    let val = node.nodeValue;
+                    let originalVal = val;
+
+                    if (templateData.rank && val.includes(templateData.rank)) {
+                        val = val.replace(templateData.rank, `#${rec.rank}`);
+                    }
+
+                    if (tName && val.includes(tName)) {
+                        val = val.replace(tName, `${rec.name} `);
+
+                        const badge = document.createElement('span');
+                        badge.className = 'theo-universal-badge';
+                        badge.textContent = '[Theo]';
+                        node.parentElement.appendChild(badge);
+
+                        tName = null;
+                    }
+
+                    if (templateData.pointsStr && val.includes(templateData.pointsStr)) {
+                        const formattedPoints = parseFloat(rec.points).toFixed(1);
+                        val = val.replace(templateData.pointsStr, `+${formattedPoints} points`);
+                    }
+
+                    if (val.match(/\d{1,2}\/\d{1,2}\/\d{4}/)) {
+                        val = val.replace(/\d{1,2}\/\d{1,2}\/\d{4}/, rec.date || 'Local');
+                    }
+
+                    if (val !== originalVal) {
+                        node.nodeValue = val;
+                    }
+                }
+
+                clone.querySelectorAll('a').forEach(a => {
+                    if (a.href.includes('youtube') || a.href.includes('youtu.be')) {
+                        a.href = rec.yt || 'javascript:void(0)';
+                        a.target = '_blank';
+                        a.onclick = (e) => e.stopPropagation();
+                    } else {
+                        a.href = 'javascript:void(0)';
+                        a.style.cursor = 'default';
+                    }
+                });
+
+                const menuContainer = document.createElement('div');
+                menuContainer.className = 'theo-menu-container';
+                menuContainer.innerHTML = `<button class="theo-menu-btn" title="Options">⋮</button>`;
+                const menuBtn = menuContainer.querySelector('.theo-menu-btn');
+
+                menuBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    const rect = menuBtn.getBoundingClientRect();
+                    if (globalDropdown.style.display === 'flex' && globalDropdown.getAttribute('data-active-rec') === rec.name) {
+                        globalDropdown.style.display = 'none';
+                        globalDropdown.removeAttribute('data-active-rec');
+                        return;
+                    }
+                    globalDropdown.setAttribute('data-active-rec', rec.name);
+                    globalDropdown.innerHTML = `
+                        <button class="edit-action">Edit Record</button>
+                        <button class="hide-action">Hide from Profile</button>
+                        <button class="delete-action">Remove</button>
+                    `;
+                    globalDropdown.style.top = `${rect.bottom + 4}px`;
+                    globalDropdown.style.left = `${rect.left}px`;
+                    globalDropdown.style.display = 'flex';
+
+                    globalDropdown.querySelector('.edit-action').onclick = (ev) => {
+                        ev.stopPropagation(); globalDropdown.style.display = 'none'; openModal(rec);
+                    };
+                    globalDropdown.querySelector('.hide-action').onclick = (ev) => {
+                        ev.stopPropagation(); globalDropdown.style.display = 'none';
+                        rec.hidden = true; saveCustomRecords(allRecords); clone.remove(); render();
+                    };
+                    globalDropdown.querySelector('.delete-action').onclick = (ev) => {
+                        ev.stopPropagation(); globalDropdown.style.display = 'none';
+                        if (confirm(`Remove "${rec.name}" from your theoretical list?`)) {
+                            saveCustomRecords(allRecords.filter(r => r.name !== rec.name)); clone.remove(); render();
+                        }
+                    };
+                };
+                clone.appendChild(menuContainer);
+                listContainer.appendChild(clone);
+            });
+
+            document.addEventListener('click', (e) => { if (!globalDropdown.contains(e.target)) globalDropdown.style.display = 'none'; });
+
+            Array.from(listContainer.children).forEach(child => {
+                child.style.setProperty('transform', 'none', 'important');
+                child.style.setProperty('position', 'relative', 'important');
+                child.style.setProperty('flex-shrink', '0', 'important');
+                const match = child.textContent.match(/#(\d+)/);
+                if (match) {
+                    child.style.setProperty('order', parseInt(match[1], 10), 'important');
+                } else {
+                    child.style.setProperty('order', '999999', 'important');
                 }
             });
 
-            const menuContainer = document.createElement('div');
-            menuContainer.className = 'theo-menu-container';
-            menuContainer.innerHTML = `<button class="theo-menu-btn" title="Options">⋮</button>`;
-            const menuBtn = menuContainer.querySelector('.theo-menu-btn');
+            updateProfileStats(totalTheoPoints, visibleRecords.length);
 
-            menuBtn.onclick = (e) => {
-                e.stopPropagation();
-                const rect = menuBtn.getBoundingClientRect();
-                if (globalDropdown.style.display === 'flex' && globalDropdown.getAttribute('data-active-rec') === rec.name) {
-                    globalDropdown.style.display = 'none';
-                    globalDropdown.removeAttribute('data-active-rec');
-                    return;
-                }
-                globalDropdown.setAttribute('data-active-rec', rec.name);
-                globalDropdown.innerHTML = `
-                    <button class="edit-action">Edit Record</button>
-                    <button class="hide-action">Hide from Profile</button>
-                    <button class="delete-action">Remove</button>
-                `;
-                globalDropdown.style.top = `${rect.bottom + 4}px`;
-                globalDropdown.style.left = `${rect.left}px`;
-                globalDropdown.style.display = 'flex';
-
-                globalDropdown.querySelector('.edit-action').onclick = (ev) => {
-                    ev.stopPropagation(); globalDropdown.style.display = 'none'; openModal(rec);
-                };
-                globalDropdown.querySelector('.hide-action').onclick = (ev) => {
-                    ev.stopPropagation(); globalDropdown.style.display = 'none';
-                    rec.hidden = true; saveCustomRecords(allRecords); clone.remove(); render();
-                };
-                globalDropdown.querySelector('.delete-action').onclick = (ev) => {
-                    ev.stopPropagation(); globalDropdown.style.display = 'none';
-                    if (confirm(`Remove "${rec.name}" from your theoretical list?`)) {
-                        saveCustomRecords(allRecords.filter(r => r.name !== rec.name)); clone.remove(); render();
-                    }
-                };
-            };
-            clone.appendChild(menuContainer);
-            listContainer.appendChild(clone);
-        });
-
-        document.addEventListener('click', (e) => { if (!globalDropdown.contains(e.target)) globalDropdown.style.display = 'none'; });
-
-        Array.from(listContainer.children).forEach(child => {
-            child.style.setProperty('transform', 'none', 'important');
-            child.style.setProperty('position', 'relative', 'important');
-            child.style.setProperty('flex-shrink', '0', 'important');
-            const match = child.textContent.match(/#(\d+)/);
-            if (match) {
-                child.style.setProperty('order', parseInt(match[1], 10), 'important');
-            } else {
-                child.style.setProperty('order', '999999', 'important');
+            const ptsBadge = document.getElementById('theo-pts-fab');
+            if (ptsBadge) {
+                if (totalTheoPoints > 0) {
+                    ptsBadge.style.display = 'inline-block';
+                    ptsBadge.textContent = `+${totalTheoPoints.toFixed(1)} pts`;
+                } else { ptsBadge.style.display = 'none'; }
             }
-        });
-
-        updateProfileStats(totalTheoPoints, visibleRecords.length);
-
-        const ptsBadge = document.getElementById('theo-pts-fab');
-        if (ptsBadge) {
-            if (totalTheoPoints > 0) {
-                ptsBadge.style.display = 'inline-block';
-                ptsBadge.textContent = `+${totalTheoPoints.toFixed(1)} pts`;
-            } else { ptsBadge.style.display = 'none'; }
+        } finally {
+            isRendering = false;
         }
     }
 
@@ -1228,8 +1257,8 @@
 
                         const badge = document.createElement('span');
                         parent.appendChild(badge);
-                    } 
-                    
+                    }
+
                     const badge = parent.querySelector('.theo-sidebar-badge') || parent.lastChild;
                     if (badge) {
                         let progressClass = packData.isComplete ? 'completed' : `prog-${Math.min(packData.done, 5)}`;
@@ -1331,16 +1360,26 @@
 
             const { totalPoints: autoPackPoints } = await evaluateCompletedPacks();
 
-            const finalPtsRaw = 81.0 + totalTheo;
-            const finalPtsTotal = 81.0 + totalTheo + autoPackPoints;
-            const finalExtremesTotal = 4 + visibleRecords.length;
+            // Pull base stats from local cache. Falls back to API ONLY if cache is completely empty
+            let baseStats = GM_getValue('aredl_base_stats_v2', null);
+            if (!baseStats || baseStats.levelPts === 0) {
+                const userMeta = await fetchActiveUserData();
+                baseStats = {
+                    levelPts: (userMeta?.total_points || 0) - (userMeta?.pack_points || 0),
+                    packPts: userMeta?.pack_points || 0,
+                    extremes: userMeta?.extremes || 0,
+                    country: userMeta?.country?.id || 203,
+                    hardestGlobal: userMeta?.hardest_rank || 999999,
+                    hardestNational: userMeta?.country_rank || 999999
+                };
+            }
 
-            const userMeta = await fetchActiveUserData();
-            const countryId = userMeta?.country?.id || 203;
-            const countryName = userMeta?.country?.name || 'NATIONAL';
+            const finalPtsRaw = baseStats.levelPts + totalTheo;
+            const finalPtsTotal = baseStats.levelPts + totalTheo + autoPackPoints;
+            const finalExtremesTotal = baseStats.extremes + visibleRecords.length;
 
             const [natRanks, rankGlobalRaw, rankGlobalTotal, rankGlobalExt, rankGlobalHrd] = await Promise.all([
-                getExactNationalRanks(finalPtsRaw, finalPtsTotal, finalExtremesTotal, bestTheoreticalPosition, countryId),
+                getExactNationalRanks(finalPtsRaw, finalPtsTotal, finalExtremesTotal, bestTheoreticalPosition, baseStats.country),
                 findGlobalPointsRank(finalPtsRaw, false),
                 findGlobalPointsRank(finalPtsTotal, true),
                 findGlobalExtremesRank(finalExtremesTotal),
@@ -1375,7 +1414,7 @@
                         </div>
                         <div style="display:flex; flex-direction:column; gap:12px;">
                             <div style="background:#1f222d; padding:12px 14px; border-radius:8px; border-left:4px solid #ff9800;">
-                                <div style="color:#aaa; font-size:12px; font-weight:bold; letter-spacing:0.5px; margin-bottom:4px;">${countryName.toUpperCase()}</div>
+                                <div style="color:#aaa; font-size:12px; font-weight:bold; letter-spacing:0.5px; margin-bottom:4px;">NATIONAL</div>
                                 <div style="display:flex; justify-content:space-between; align-items:center; margin-top:2px;">
                                     <span style="font-size:14px;">With Packs:</span>
                                     <span><strong style="color:#ff9800; font-size:16px;">#${natRanks.total || '-'}</strong> <span style="color:#aaa; font-size:12px;">(${finalPtsTotal.toFixed(1)} pts)</span></span>
