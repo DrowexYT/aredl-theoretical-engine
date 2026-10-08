@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         AREDL Theoretical Profile & Pack Engine (V1.6 Public Release)
+// @name         AREDL Theoretical Profile & Pack Engine (V2.0 Public Release)
 // @namespace    http://tampermonkey.net/
-// @version      1.6
-// @description  Client-side progression sandbox for AREDL. Enables theoretical level completions, dynamic pack evaluation, point calculations, live leaderboard estimations, auto-syncing list placements, and custom completion dates.
+// @version      2.0
+// @description  Client-side progression sandbox for AREDL. Enables theoretical level completions, dynamic pack evaluation, point calculations, live leaderboard estimations, and dynamic autonomous Dual-Bar breakdown tracking.
 // @author       Drowex
 // @match        https://aredl.net/*
 // @grant        GM_getValue
@@ -62,7 +62,7 @@
         GM_setValue('aredl_theo_v15', records);
     }
 
-    // AUTO-SYNC ENGINE: Checks saved theoretical levels against fresh API data to update shifted ranks and decayed points
+    // AUTO-SYNC ENGINE
     async function syncRecordsWithApi() {
         const apiData = await fetchAredlApi();
         if (!apiData) return;
@@ -518,9 +518,13 @@
         } catch (e) { return baseStats.hardestGlobal; }
     }
 
+    // --- SKELETON LOADER FIX ---
     function findTemplateCard() {
         if (!isMyProfilePage()) return null;
-        const links = Array.from(document.querySelectorAll('a[href*="youtube.com"], a[href*="youtu.be"]'));
+
+        // Strict exclusion: Make absolutely sure we do not grab our own clones as a blueprint!
+        const links = Array.from(document.querySelectorAll('a[href*="youtube.com"], a[href*="youtu.be"]')).filter(a => !a.closest('.theo-clone'));
+
         const validLinks = links.filter(a => {
             let p = a.parentElement;
             while(p && p.tagName !== 'BODY') {
@@ -747,9 +751,166 @@
         };
     }
 
-    // STATE LOCKS to completely prevent API rate limiting from DOM mutations
     let profileStatsUpdating = false;
     let isRendering = false;
+    let scalingBars = false;
+
+    // --- V2.1 AUTONOMOUS DUAL-BAR ENGINE ---
+    async function scaleRecordBars() {
+        if (!isMyProfilePage() || scalingBars) return;
+
+        const breakdownHeader = Array.from(document.querySelectorAll('h2, h3, span, div, p')).find(el => el.textContent.trim().toUpperCase() === 'RECORDS BREAKDOWN');
+        if (!breakdownHeader) return;
+
+        let breakdownContainer = breakdownHeader.closest('.bg-surface') || breakdownHeader.parentElement.parentElement;
+        if (!breakdownContainer) return;
+
+        // Strict Exclusion: Only scale if there are freshly rendered unscaled bars
+        const unscaledBars = breakdownContainer.querySelectorAll('div[role="progressbar"]:not([data-theo-scaled="true"])');
+        if (unscaledBars.length === 0) return;
+
+        scalingBars = true;
+        try {
+            const apiData = await fetchAredlApi();
+            if (!apiData) return;
+
+            const visibleRecords = getCustomRecords().filter(r => !r.hidden);
+            let theoTags = {};
+            let theoTiers = {};
+
+            visibleRecords.forEach(rec => {
+                const match = apiData.find(l => (rec.level_id && String(l.level_id) === String(rec.level_id)) || cleanString(l.name) === cleanString(rec.name));
+                if (match) {
+                    if (match.tier) {
+                        let tierName = typeof match.tier === 'string' ? match.tier : match.tier.name;
+                        if (tierName) {
+                            let t = tierName.toUpperCase().trim();
+                            theoTiers[t] = (theoTiers[t] || 0) + 1;
+                        }
+                    }
+                    if (match.tags) {
+                        let tagsArray = Array.isArray(match.tags) ? match.tags : [match.tags];
+                        tagsArray.forEach(tag => {
+                            let tagName = typeof tag === 'string' ? tag : tag.name;
+                            if (tagName) {
+                                let t = tagName.toUpperCase().trim();
+                                theoTags[t] = (theoTags[t] || 0) + 1;
+                            }
+                        });
+                    }
+                }
+            });
+
+            // Group bars by their individual tab panel to calculate isolated maximums
+            const allBars = breakdownContainer.querySelectorAll('div[role="progressbar"]');
+            const panels = new Set();
+            allBars.forEach(b => {
+                const p = b.closest('[role="tabpanel"]') || breakdownContainer;
+                panels.add(p);
+            });
+
+            panels.forEach(panel => {
+                const bars = panel.querySelectorAll('div[role="progressbar"]');
+                let currentMax = 0;
+
+                // Pass 1: Find mathematical maximum and cache original counts
+                bars.forEach(bar => {
+                    bar.setAttribute('data-theo-scaled', 'true'); // Flag as processed
+
+                    const row = bar.closest('.flex');
+                    if (!row) return;
+
+                    const labelEl = row.querySelector('.truncate');
+                    const numEl = row.querySelector('.text-right') || row.querySelector('div:last-child');
+                    if (!labelEl || !numEl) return;
+
+                    const labelText = labelEl.textContent.trim().toUpperCase();
+
+                    if (!numEl.hasAttribute('data-orig-count')) {
+                        numEl.setAttribute('data-orig-count', numEl.textContent.trim());
+                    }
+
+                    const baseCount = parseInt(numEl.getAttribute('data-orig-count'), 10) || 0;
+                    const addedValue = (theoTiers[labelText] || 0) + (theoTags[labelText] || 0);
+                    const newCount = baseCount + addedValue;
+
+                    if (newCount > currentMax) currentMax = newCount;
+                });
+
+                // Pass 2: Scale Dual-Bar width and animate
+                bars.forEach(bar => {
+                    const row = bar.closest('.flex');
+                    if (!row) return;
+
+                    const labelEl = row.querySelector('.truncate');
+                    const numEl = row.querySelector('.text-right') || row.querySelector('div:last-child');
+                    if (!labelEl || !numEl) return;
+
+                    const labelText = labelEl.textContent.trim().toUpperCase();
+                    const baseCount = parseInt(numEl.getAttribute('data-orig-count'), 10) || 0;
+                    const addedValue = (theoTiers[labelText] || 0) + (theoTags[labelText] || 0);
+                    const newCount = baseCount + addedValue;
+
+                    // Safely override Tailwind flex-shrink to prevent wrapping
+                    numEl.classList.remove('w-8');
+                    numEl.style.minWidth = '3rem';
+
+                    if (addedValue > 0) {
+                        numEl.textContent = `${newCount} (${baseCount})`;
+                        numEl.style.color = '#ff9800';
+                        numEl.style.fontWeight = 'bold';
+                        numEl.style.whiteSpace = 'nowrap';
+                    } else {
+                        numEl.textContent = baseCount;
+                        numEl.style.color = '';
+                        numEl.style.fontWeight = '';
+                        numEl.style.whiteSpace = 'nowrap';
+                    }
+
+                    const maxToUse = currentMax > 0 ? currentMax : 1;
+                    const basePercentage = (baseCount / maxToUse) * 100;
+                    const addedPercentage = (addedValue / maxToUse) * 100;
+
+                    bar.setAttribute('aria-valuenow', newCount);
+                    bar.setAttribute('aria-valuemax', maxToUse);
+                    bar.setAttribute('data-value', newCount);
+                    bar.setAttribute('data-max', maxToUse);
+
+                    const innerBar = bar.querySelector('div.bg-primary') || bar.firstElementChild;
+                    if (innerBar && !innerBar.classList.contains('theo-added-bar')) {
+                        bar.querySelectorAll('.theo-added-bar').forEach(e => e.remove());
+
+                        // Render official base bar
+                        innerBar.setAttribute('data-value', baseCount);
+                        innerBar.setAttribute('data-max', maxToUse);
+                        innerBar.style.setProperty('width', `${basePercentage}%`, 'important');
+                        innerBar.style.removeProperty('background-color');
+
+                        // Inject theoretical extension bar
+                        if (addedValue > 0) {
+                            const extension = document.createElement('div');
+                            extension.className = 'theo-added-bar block';
+                            extension.setAttribute('data-state', 'complete');
+                            extension.style.cssText = `
+                                position: absolute;
+                                top: 0;
+                                left: ${basePercentage}%;
+                                height: 100%;
+                                width: ${addedPercentage}%;
+                                background: repeating-linear-gradient(45deg, #ff9800, #ff9800 6px, #d97706 6px, #d97706 12px);
+                                border-left: 1.5px solid #121316;
+                                transition: width 500ms;
+                                z-index: 10;
+                            `;
+                            bar.appendChild(extension);
+                        }
+                    }
+                });
+            });
+        } finally {
+            scalingBars = false;
+        }
+    }
 
     async function updateProfileStats(totalTheoPoints, theoCount) {
         if (!isMyProfilePage() || profileStatsUpdating) return;
@@ -758,7 +919,6 @@
         try {
             const { earnedPacks, totalPoints: autoPackPoints } = await evaluateCompletedPacks();
 
-            // 1. SILENT DOM EXTRACTION: Fetch all official base stats directly from the profile without API calls
             let currentBasePts = 0;
             let baseExtremes = 0;
             let origPackPts = 0;
@@ -878,7 +1038,6 @@
                 if (cMatch) baseHardestNational = parseInt(cMatch[1], 10);
             }
 
-            // Save Base Stats instantly to completely eliminate Leaderboard API lag
             GM_setValue('aredl_base_stats_v2', {
                 levelPts: currentBasePts,
                 packPts: origPackPts,
@@ -888,8 +1047,8 @@
                 hardestNational: baseHardestNational
             });
 
-            let bestTheoreticalPosition = 999999;
             const visibleRecords = getCustomRecords().filter(r => !r.hidden);
+            let bestTheoreticalPosition = 999999;
             visibleRecords.forEach(r => {
                 const rPos = parseInt(r.rank, 10);
                 if (!isNaN(rPos) && rPos < bestTheoreticalPosition) bestTheoreticalPosition = rPos;
@@ -959,7 +1118,11 @@
 
         try {
             const target = findTemplateCard();
+
             if (!target) return;
+            const templateData = extractTemplateData(target.card);
+            if (!templateData || !templateData.rank || !templateData.pointsStr || !templateData.name || templateData.name === '') return;
+
             const { card: templateCard, listContainer } = target;
 
             listContainer.classList.add('aredl-forced-flex');
@@ -975,7 +1138,6 @@
 
             document.querySelectorAll('.theo-clone').forEach(el => el.remove());
 
-            const templateData = extractTemplateData(templateCard);
             const allRecords = getCustomRecords();
             const visibleRecords = allRecords.filter(r => !r.hidden);
 
@@ -1360,7 +1522,6 @@
 
             const { totalPoints: autoPackPoints } = await evaluateCompletedPacks();
 
-            // Pull base stats from local cache. Falls back to API ONLY if cache is completely empty
             let baseStats = GM_getValue('aredl_base_stats_v2', null);
             if (!baseStats || baseStats.levelPts === 0) {
                 const userMeta = await fetchActiveUserData();
@@ -1469,6 +1630,7 @@
     new MutationObserver(() => {
         checkAndAutoDetectUser();
         const currentUrl = location.href;
+
         if (currentUrl !== lastUrl) {
             lastUrl = currentUrl;
             const lbPill = document.getElementById('theo-lb-pill');
@@ -1476,6 +1638,7 @@
 
             setTimeout(() => {
                 if (isMyProfilePage()) {
+                    scaleRecordBars(); // Run autonomous bar-scaler instantly on URL change
                     if (window.location.search.includes('tab=packs')) {
                         renderProfilePacksTab();
                     } else { render(); }
@@ -1487,6 +1650,11 @@
             }, 200);
         } else {
             if (isMyProfilePage()) {
+
+                // Active Scan: Detect unscaled dynamically-loaded React bars and scale them
+                const unscaledBars = document.querySelectorAll('.bg-surface div[role="progressbar"]:not([data-theo-scaled="true"])');
+                if (unscaledBars.length > 0) scaleRecordBars();
+
                 if (window.location.search.includes('tab=packs')) {
                     if (!document.querySelector('.theo-profile-pack-injected')) renderProfilePacksTab();
                 } else if (!document.querySelector('.theo-clone') && getCustomRecords().filter(r => !r.hidden).length > 0) {
@@ -1501,7 +1669,7 @@
 
     setTimeout(() => {
         checkAndAutoDetectUser();
-        syncRecordsWithApi(); // Run the auto-sync engine on startup
+        syncRecordsWithApi();
         if (isMyProfilePage()) {
             if (window.location.search.includes('tab=packs')) renderProfilePacksTab();
             else render();
