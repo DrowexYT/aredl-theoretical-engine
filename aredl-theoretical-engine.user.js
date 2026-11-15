@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         AREDL Theoretical Profile & Pack Engine (V2.0 Public Release)
+// @name         AREDL Theoretical Profile & Pack Engine (V2.1)
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      2.1
 // @description  Client-side progression sandbox for AREDL. Enables theoretical level completions, dynamic pack evaluation, point calculations, live leaderboard estimations, and dynamic autonomous Dual-Bar breakdown tracking.
 // @author       Drowex
 // @match        https://aredl.net/*
@@ -60,6 +60,59 @@
     function saveCustomRecords(records) {
         records.sort((a, b) => parseFloat(a.rank) - parseFloat(b.rank));
         GM_setValue('aredl_theo_v15', records);
+    }
+
+    // --- TOGGLES (persistent) ---
+    function isScriptEnabled() { return GM_getValue('aredl_theo_enabled', true) !== false; }
+    function setScriptEnabled(v) { GM_setValue('aredl_theo_enabled', !!v); }
+    function isSeamlessMode() { return !!GM_getValue('aredl_theo_seamless', false); }
+    function setSeamlessMode(v) { GM_setValue('aredl_theo_seamless', !!v); }
+
+    /** Strip every theo visual so the page looks stock. Settings gear stays. */
+    function stripAllTheoVisuals() {
+        document.querySelectorAll(
+            '.theo-clone, .theo-profile-pack-injected, #theo-isolated-pack-container, ' +
+            '#theo-lb-pill, .theo-added-bar, .theo-sidebar-badge, .theo-universal-badge, ' +
+            '#theo-pack-action-container, .theo-menu-container, #theo-fab'
+        ).forEach(el => el.remove());
+
+        document.querySelectorAll('[data-theo-scaled="true"]').forEach(bar => {
+            bar.removeAttribute('data-theo-scaled');
+            const inner = bar.querySelector('div.bg-primary') || bar.firstElementChild;
+            if (inner) inner.style.removeProperty('width');
+            bar.querySelectorAll('.theo-added-bar').forEach(e => e.remove());
+        });
+
+        document.querySelectorAll('[data-original-pts], [data-original-count], [data-original-classic], [data-original-packs], [data-original-rank], [data-orig-count]').forEach(el => {
+            const orig =
+                el.getAttribute('data-original-pts') ||
+                el.getAttribute('data-original-count') ||
+                el.getAttribute('data-original-classic') ||
+                el.getAttribute('data-original-packs') ||
+                el.getAttribute('data-original-rank') ||
+                el.getAttribute('data-orig-count');
+            if (orig != null) {
+                if (el.hasAttribute('data-original-count') && /COMPLETED/i.test(el.textContent)) {
+                    el.textContent = `COMPLETED (${orig})`;
+                } else if (el.hasAttribute('data-original-classic') && /CLASSIC/i.test(el.textContent)) {
+                    el.textContent = `CLASSIC (${orig})`;
+                } else if (el.hasAttribute('data-original-packs') && /PACKS/i.test(el.textContent)) {
+                    el.textContent = `PACKS (${orig})`;
+                } else if (el.hasAttribute('data-original-rank') || el.hasAttribute('data-original-pts') || el.hasAttribute('data-orig-count')) {
+                    el.textContent = orig;
+                }
+                el.style.color = '';
+                el.style.fontWeight = '';
+                el.style.whiteSpace = '';
+            }
+        });
+
+        document.querySelectorAll('.theo-hide-native-counter').forEach(el => el.classList.remove('theo-hide-native-counter'));
+        document.querySelectorAll('.theo-pack-level-incomplete, .theo-level-colored').forEach(el => {
+            el.classList.remove('theo-pack-level-incomplete', 'theo-level-colored');
+            el.style.filter = '';
+            el.style.opacity = '';
+        });
     }
 
     // AUTO-SYNC ENGINE
@@ -125,18 +178,66 @@
 
     const style = document.createElement('style');
     style.innerHTML = `
-        /* Main FAB & Modals */
+        /* FAB — only when script is enabled */
         .aredl-fab {
-            position: fixed; bottom: 30px; right: 30px;
+            position: fixed; bottom: 30px; right: 30px; z-index: 99999;
             background: #ff9800; color: #121316; border: none;
-            border-radius: 50px; padding: 12px 24px; font-size: 13px; font-weight: 800;
+            border-radius: 50px; padding: 12px 22px; font-size: 13px; font-weight: 800;
             cursor: pointer; box-shadow: 0 4px 15px rgba(255, 152, 0, 0.4);
-            z-index: 99999; transition: transform 0.2s, box-shadow 0.2s;
+            transition: transform 0.2s, box-shadow 0.2s;
             display: flex; align-items: center; gap: 8px; font-family: sans-serif;
         }
-        .aredl-fab:hover { transform: scale(1.05); box-shadow: 0 6px 20px rgba(255, 152, 0, 0.6); }
+        .aredl-fab:hover { transform: scale(1.04); box-shadow: 0 6px 20px rgba(255, 152, 0, 0.6); }
         .theo-pts-badge {
             background: rgba(0,0,0,0.6); color: white; padding: 2px 8px; border-radius: 12px; font-size: 11px;
+        }
+
+        /* Subtle settings gear — bottom-left, low profile */
+        .theo-settings-btn {
+            position: fixed; bottom: 14px; left: 14px; z-index: 99998;
+            width: 28px; height: 28px; border-radius: 50%;
+            background: rgba(26, 28, 35, 0.5); border: 1px solid rgba(255, 152, 0, 0.22);
+            color: rgba(255, 255, 255, 0.4); font-size: 13px; line-height: 1;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: 0.2s; font-family: sans-serif; padding: 0;
+            backdrop-filter: blur(4px);
+        }
+        .theo-settings-btn:hover {
+            background: rgba(26, 28, 35, 0.95); border-color: #ff9800; color: #ff9800;
+            transform: scale(1.1);
+        }
+        .theo-settings-panel {
+            position: fixed; bottom: 48px; left: 14px; z-index: 99999;
+            background: #1a1c23; border: 1px solid #ff9800; border-radius: 10px;
+            padding: 12px 14px; display: none; flex-direction: column; gap: 10px;
+            box-shadow: 0 10px 28px rgba(0,0,0,0.65); min-width: 210px;
+            font-family: sans-serif;
+        }
+        .theo-settings-panel.open { display: flex; }
+        .theo-settings-title {
+            font-size: 11px; font-weight: 800; color: #ff9800; letter-spacing: 0.4px;
+            text-transform: uppercase;
+        }
+        .theo-settings-row {
+            display: flex; align-items: center; justify-content: space-between; gap: 14px;
+            font-size: 12px; color: #eee; font-weight: 600; user-select: none; cursor: pointer;
+        }
+        .theo-settings-switch {
+            position: relative; width: 36px; height: 20px; flex-shrink: 0;
+        }
+        .theo-settings-switch input { opacity: 0; width: 0; height: 0; }
+        .theo-settings-slider {
+            position: absolute; inset: 0; background: #444; border-radius: 20px;
+            transition: 0.2s; cursor: pointer;
+        }
+        .theo-settings-slider:before {
+            content: ""; position: absolute; height: 14px; width: 14px; left: 3px; bottom: 3px;
+            background: #fff; border-radius: 50%; transition: 0.2s;
+        }
+        .theo-settings-switch input:checked + .theo-settings-slider { background: #ff9800; }
+        .theo-settings-switch input:checked + .theo-settings-slider:before { transform: translateX(16px); }
+        .theo-settings-hint {
+            font-size: 10px; color: #777; line-height: 1.35;
         }
         .theo-modal-overlay {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.8);
@@ -201,6 +302,14 @@
             line-height: 1.1 !important;
             box-shadow: 0 1px 3px rgba(0,0,0,0.4) !important;
             text-shadow: none !important;
+        }
+        /* Seamless mode: hide theo markings */
+        body.theo-seamless .theo-universal-badge,
+        body.theo-seamless .theo-sidebar-badge,
+        body.theo-seamless .theo-menu-container { display: none !important; }
+        body.theo-seamless .theo-clone {
+            border: none !important;
+            box-shadow: none !important;
         }
 
         /* Sidebar Badges */
@@ -522,17 +631,17 @@
     function findTemplateCard() {
         if (!isMyProfilePage()) return null;
 
-        // Strict exclusion: Make absolutely sure we do not grab our own clones as a blueprint!
         const links = Array.from(document.querySelectorAll('a[href*="youtube.com"], a[href*="youtu.be"]')).filter(a => !a.closest('.theo-clone'));
 
         const validLinks = links.filter(a => {
             let p = a.parentElement;
-            while(p && p.tagName !== 'BODY') {
+            while (p && p.tagName !== 'BODY') {
                 if (p.textContent.includes('points') && p.textContent.match(/#\d+/)) return true;
                 p = p.parentElement;
             }
             return false;
         });
+
         if (validLinks.length >= 2) {
             let lca = validLinks[0].parentElement;
             while (lca && lca.tagName !== 'BODY') {
@@ -547,11 +656,14 @@
                 return { card: templateRow, listContainer: lca };
             }
         }
+
         for (let a of validLinks) {
             let card = a.closest('div');
             while (card && card.tagName !== 'BODY') {
                 if (card.textContent.match(/#\d+/) && card.textContent.match(/\+\d+(\.\d+)?\s*points/)) {
-                    if (card.querySelectorAll('a[href*="youtu"]').length === 1) return { card: card, listContainer: card.parentElement };
+                    if (card.querySelectorAll('a[href*="youtu"]').length === 1) {
+                        return { card: card, listContainer: card.parentElement };
+                    }
                 }
                 card = card.parentElement;
             }
@@ -757,7 +869,7 @@
 
     // --- V2.1 AUTONOMOUS DUAL-BAR ENGINE ---
     async function scaleRecordBars() {
-        if (!isMyProfilePage() || scalingBars) return;
+        if (!isMyProfilePage() || scalingBars || !isScriptEnabled()) return;
 
         const breakdownHeader = Array.from(document.querySelectorAll('h2, h3, span, div, p')).find(el => el.textContent.trim().toUpperCase() === 'RECORDS BREAKDOWN');
         if (!breakdownHeader) return;
@@ -855,13 +967,14 @@
                     numEl.classList.remove('w-8');
                     numEl.style.minWidth = '3rem';
 
-                    if (addedValue > 0) {
+                    const seamlessBars = isSeamlessMode();
+                    if (addedValue > 0 && !seamlessBars) {
                         numEl.textContent = `${newCount} (${baseCount})`;
                         numEl.style.color = '#ff9800';
                         numEl.style.fontWeight = 'bold';
                         numEl.style.whiteSpace = 'nowrap';
                     } else {
-                        numEl.textContent = baseCount;
+                        numEl.textContent = newCount;
                         numEl.style.color = '';
                         numEl.style.fontWeight = '';
                         numEl.style.whiteSpace = 'nowrap';
@@ -870,6 +983,7 @@
                     const maxToUse = currentMax > 0 ? currentMax : 1;
                     const basePercentage = (baseCount / maxToUse) * 100;
                     const addedPercentage = (addedValue / maxToUse) * 100;
+                    const totalPercentage = ((baseCount + addedValue) / maxToUse) * 100;
 
                     bar.setAttribute('aria-valuenow', newCount);
                     bar.setAttribute('aria-valuemax', maxToUse);
@@ -880,29 +994,34 @@
                     if (innerBar && !innerBar.classList.contains('theo-added-bar')) {
                         bar.querySelectorAll('.theo-added-bar').forEach(e => e.remove());
 
-                        // Render official base bar
-                        innerBar.setAttribute('data-value', baseCount);
-                        innerBar.setAttribute('data-max', maxToUse);
-                        innerBar.style.setProperty('width', `${basePercentage}%`, 'important');
-                        innerBar.style.removeProperty('background-color');
+                        if (seamlessBars) {
+                            innerBar.setAttribute('data-value', newCount);
+                            innerBar.setAttribute('data-max', maxToUse);
+                            innerBar.style.setProperty('width', `${totalPercentage}%`, 'important');
+                            innerBar.style.removeProperty('background-color');
+                        } else {
+                            innerBar.setAttribute('data-value', baseCount);
+                            innerBar.setAttribute('data-max', maxToUse);
+                            innerBar.style.setProperty('width', `${basePercentage}%`, 'important');
+                            innerBar.style.removeProperty('background-color');
 
-                        // Inject theoretical extension bar
-                        if (addedValue > 0) {
-                            const extension = document.createElement('div');
-                            extension.className = 'theo-added-bar block';
-                            extension.setAttribute('data-state', 'complete');
-                            extension.style.cssText = `
-                                position: absolute;
-                                top: 0;
-                                left: ${basePercentage}%;
-                                height: 100%;
-                                width: ${addedPercentage}%;
-                                background: repeating-linear-gradient(45deg, #ff9800, #ff9800 6px, #d97706 6px, #d97706 12px);
-                                border-left: 1.5px solid #121316;
-                                transition: width 500ms;
-                                z-index: 10;
-                            `;
-                            bar.appendChild(extension);
+                            if (addedValue > 0) {
+                                const extension = document.createElement('div');
+                                extension.className = 'theo-added-bar block';
+                                extension.setAttribute('data-state', 'complete');
+                                extension.style.cssText = `
+                                    position: absolute;
+                                    top: 0;
+                                    left: ${basePercentage}%;
+                                    height: 100%;
+                                    width: ${addedPercentage}%;
+                                    background: repeating-linear-gradient(45deg, #ff9800, #ff9800 6px, #d97706 6px, #d97706 12px);
+                                    border-left: 1.5px solid #121316;
+                                    transition: width 500ms;
+                                    z-index: 10;
+                                `;
+                                bar.appendChild(extension);
+                            }
                         }
                     }
                 });
@@ -913,8 +1032,9 @@
     }
 
     async function updateProfileStats(totalTheoPoints, theoCount) {
-        if (!isMyProfilePage() || profileStatsUpdating) return;
+        if (!isMyProfilePage() || profileStatsUpdating || !isScriptEnabled()) return;
         profileStatsUpdating = true;
+        const seamless = isSeamlessMode();
 
         try {
             const { earnedPacks, totalPoints: autoPackPoints } = await evaluateCompletedPacks();
@@ -962,8 +1082,13 @@
 
                             if (addedVal > 0) {
                                 const combinedTotal = (originalPts + addedVal).toFixed(1);
-                                targetEl.textContent = `${combinedTotal} (${originalPts > 0 ? originalPts : '-'})`;
-                                targetEl.style.color = '#ff9800';
+                                if (seamless) {
+                                    targetEl.textContent = combinedTotal;
+                                    targetEl.style.color = '';
+                                } else {
+                                    targetEl.textContent = `${combinedTotal} (${originalPts > 0 ? originalPts : '-'})`;
+                                    targetEl.style.color = '#ff9800';
+                                }
                                 targetEl.style.whiteSpace = 'nowrap';
                             } else {
                                 targetEl.textContent = originalPts > 0 ? originalPts : '-';
@@ -986,8 +1111,13 @@
                         const orig = parseInt(el.getAttribute('data-original-count'), 10);
                         if (!isNaN(orig)) {
                             baseExtremes = orig;
-                            el.textContent = `COMPLETED (${orig + theoCount} [${orig}])`;
-                            el.style.color = '#ff9800';
+                            if (seamless) {
+                                el.textContent = `COMPLETED (${orig + theoCount})`;
+                                el.style.color = '';
+                            } else {
+                                el.textContent = `COMPLETED (${orig + theoCount} [${orig}])`;
+                                el.style.color = '#ff9800';
+                            }
                         }
                     }
                     else if (/^CLASSIC\s*\(.*\)$/i.test(txt)) {
@@ -997,8 +1127,13 @@
                         }
                         const origClassic = parseInt(el.getAttribute('data-original-classic'), 10);
                         if (!isNaN(origClassic)) {
-                            el.textContent = `CLASSIC (${origClassic + theoCount} [${origClassic}])`;
-                            el.style.color = '#ff9800';
+                            if (seamless) {
+                                el.textContent = `CLASSIC (${origClassic + theoCount})`;
+                                el.style.color = '';
+                            } else {
+                                el.textContent = `CLASSIC (${origClassic + theoCount} [${origClassic}])`;
+                                el.style.color = '#ff9800';
+                            }
                         }
                     }
                     else if (/^PACKS\s*\(.*\)$/i.test(txt)) {
@@ -1008,8 +1143,13 @@
                         }
                         const origPacks = parseInt(el.getAttribute('data-original-packs'), 10);
                         if (!isNaN(origPacks)) {
-                            el.textContent = `PACKS (${origPacks + earnedPacks.length} [${origPacks}])`;
-                            el.style.color = '#ff9800';
+                            if (seamless) {
+                                el.textContent = `PACKS (${origPacks + earnedPacks.length})`;
+                                el.style.color = '';
+                            } else {
+                                el.textContent = `PACKS (${origPacks + earnedPacks.length} [${origPacks}])`;
+                                el.style.color = '#ff9800';
+                            }
                         }
                     }
                 }
@@ -1083,8 +1223,13 @@
                     }
                     const origRank = rankValEl.getAttribute('data-original-rank');
                     if (origRank) {
-                        rankValEl.textContent = `#${newRankVal} (${origRank})`;
-                        rankValEl.style.color = '#ff9800';
+                        if (seamless) {
+                            rankValEl.textContent = `#${newRankVal}`;
+                            rankValEl.style.color = '';
+                        } else {
+                            rankValEl.textContent = `#${newRankVal} (${origRank})`;
+                            rankValEl.style.color = '#ff9800';
+                        }
                         rankValEl.style.whiteSpace = 'nowrap';
                     }
                 }
@@ -1112,29 +1257,160 @@
         document.body.appendChild(globalDropdown);
     }
 
+    // Retry state for first-load card injection
+    let cardRenderRetryTimer = null;
+    let cardRenderAttempts = 0;
+    const CARD_RENDER_MAX_ATTEMPTS = 12;
+
+    function ensureSettingsUI() {
+        if (document.getElementById('theo-settings-btn')) return;
+
+        const btn = document.createElement('button');
+        btn.id = 'theo-settings-btn';
+        btn.className = 'theo-settings-btn';
+        btn.title = 'Theoretical Engine settings';
+        btn.textContent = '⚙';
+        btn.setAttribute('aria-label', 'Theoretical Engine settings');
+
+        const panel = document.createElement('div');
+        panel.id = 'theo-settings-panel';
+        panel.className = 'theo-settings-panel';
+        panel.innerHTML = `
+            <div class="theo-settings-title">Theo Engine</div>
+            <label class="theo-settings-row">
+                <span>Script enabled</span>
+                <span class="theo-settings-switch">
+                    <input type="checkbox" id="theo-toggle-enabled" ${isScriptEnabled() ? 'checked' : ''}>
+                    <span class="theo-settings-slider"></span>
+                </span>
+            </label>
+            <label class="theo-settings-row">
+                <span>Seamless mode</span>
+                <span class="theo-settings-switch">
+                    <input type="checkbox" id="theo-toggle-seamless" ${isSeamlessMode() ? 'checked' : ''}>
+                    <span class="theo-settings-slider"></span>
+                </span>
+            </label>
+            <div class="theo-settings-hint">Seamless hides [Theo] tags, orange borders, and original values — useful for screenshots.</div>
+        `;
+
+        document.body.appendChild(btn);
+        document.body.appendChild(panel);
+
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            panel.classList.toggle('open');
+        };
+        document.addEventListener('click', (e) => {
+            if (!panel.contains(e.target) && e.target !== btn) panel.classList.remove('open');
+        });
+
+        document.getElementById('theo-toggle-enabled').onchange = (e) => {
+            setScriptEnabled(e.target.checked);
+            applyToggleState();
+        };
+        document.getElementById('theo-toggle-seamless').onchange = (e) => {
+            setSeamlessMode(e.target.checked);
+            applyToggleState();
+        };
+    }
+
+    function ensureFab() {
+        // Hide FAB when script is off OR seamless mode is on (clean screenshots)
+        if (!isScriptEnabled() || isSeamlessMode()) {
+            const existing = document.getElementById('theo-fab');
+            if (existing) existing.remove();
+            return;
+        }
+        if (document.getElementById('theo-fab')) return;
+        if (!isMyProfilePage()) return;
+
+        const fab = document.createElement('button');
+        fab.id = 'theo-fab';
+        fab.className = 'aredl-fab';
+        fab.innerHTML = `+ ADD THEORETICAL DEMON <span id="theo-pts-fab" class="theo-pts-badge" style="display:none;"></span>`;
+        fab.onclick = () => openModal(null);
+        document.body.appendChild(fab);
+    }
+
+    function applyToggleState() {
+        const enabled = isScriptEnabled();
+        const seamless = isSeamlessMode();
+
+        document.body.classList.toggle('theo-seamless', enabled && seamless);
+
+        const seamlessToggle = document.getElementById('theo-toggle-seamless');
+        if (seamlessToggle) seamlessToggle.disabled = !enabled;
+
+        if (!enabled) {
+            stripAllTheoVisuals();
+            ensureFab(); // removes FAB
+            return;
+        }
+
+        ensureFab();
+        if (isMyProfilePage()) {
+            if (window.location.search.includes('tab=packs')) {
+                renderProfilePacksTab();
+            } else {
+                cardRenderAttempts = 0;
+                render();
+            }
+        }
+        if (isPacksPage()) renderPacksPage();
+        if (isLeaderboardPage()) renderLeaderboardHUD();
+    }
+
+    function scheduleCardRenderRetry() {
+        if (cardRenderRetryTimer) return;
+        if (cardRenderAttempts >= CARD_RENDER_MAX_ATTEMPTS) return;
+        if (!isMyProfilePage() || !isScriptEnabled()) return;
+        if (window.location.search.includes('tab=packs')) return;
+        if (document.querySelector('.theo-clone')) return;
+        if (getCustomRecords().filter(r => !r.hidden).length === 0) return;
+
+        cardRenderAttempts++;
+        const delay = Math.min(150 + cardRenderAttempts * 80, 450);
+        cardRenderRetryTimer = setTimeout(() => {
+            cardRenderRetryTimer = null;
+            render();
+        }, delay);
+    }
+
     function render() {
         if (!isMyProfilePage() || isRendering) return;
+        if (!isScriptEnabled()) {
+            ensureSettingsUI();
+            ensureFab();
+            return;
+        }
         isRendering = true;
 
         try {
-            const target = findTemplateCard();
+            ensureSettingsUI();
+            ensureFab();
 
-            if (!target) return;
+            const target = findTemplateCard();
+            if (!target) {
+                scheduleCardRenderRetry();
+                return;
+            }
             const templateData = extractTemplateData(target.card);
-            if (!templateData || !templateData.rank || !templateData.pointsStr || !templateData.name || templateData.name === '') return;
+            if (!templateData || !templateData.rank || !templateData.pointsStr || !templateData.name || templateData.name === '') {
+                scheduleCardRenderRetry();
+                return;
+            }
+
+            cardRenderAttempts = 0;
+            if (cardRenderRetryTimer) {
+                clearTimeout(cardRenderRetryTimer);
+                cardRenderRetryTimer = null;
+            }
 
             const { card: templateCard, listContainer } = target;
+            const seamless = isSeamlessMode();
 
             listContainer.classList.add('aredl-forced-flex');
-
-            if (!document.getElementById('theo-fab')) {
-                const fab = document.createElement('button');
-                fab.id = 'theo-fab';
-                fab.className = 'aredl-fab';
-                fab.innerHTML = `+ ADD THEORETICAL DEMON <span id="theo-pts-fab" class="theo-pts-badge" style="display:none;"></span>`;
-                fab.onclick = () => openModal(null);
-                document.body.appendChild(fab);
-            }
 
             document.querySelectorAll('.theo-clone').forEach(el => el.remove());
 
@@ -1163,12 +1439,14 @@
                     };
                 }
 
-                const visualInner = clone.querySelector('a[href*="youtu"]')?.closest('div[style*="background"]');
-                if (visualInner) {
-                    visualInner.style.border = '1px dashed #ff9800';
-                    visualInner.style.boxShadow = 'inset 0 0 15px rgba(255, 152, 0, 0.15)';
-                } else {
-                    clone.style.border = '1px dashed #ff9800';
+                if (!seamless) {
+                    const visualInner = clone.querySelector('a[href*="youtu"]')?.closest('div[style*="background"]');
+                    if (visualInner) {
+                        visualInner.style.border = '1px dashed #ff9800';
+                        visualInner.style.boxShadow = 'inset 0 0 15px rgba(255, 152, 0, 0.15)';
+                    } else {
+                        clone.style.border = '1px dashed #ff9800';
+                    }
                 }
 
                 if (rec.level_id) {
@@ -1197,10 +1475,12 @@
                     if (tName && val.includes(tName)) {
                         val = val.replace(tName, `${rec.name} `);
 
-                        const badge = document.createElement('span');
-                        badge.className = 'theo-universal-badge';
-                        badge.textContent = '[Theo]';
-                        node.parentElement.appendChild(badge);
+                        if (!seamless) {
+                            const badge = document.createElement('span');
+                            badge.className = 'theo-universal-badge';
+                            badge.textContent = '[Theo]';
+                            node.parentElement.appendChild(badge);
+                        }
 
                         tName = null;
                     }
@@ -1300,7 +1580,7 @@
     }
 
     async function renderProfilePacksTab() {
-        if (!isMyProfilePage() || !window.location.search.includes('tab=packs')) return;
+        if (!isMyProfilePage() || !window.location.search.includes('tab=packs') || !isScriptEnabled()) return;
 
         const activePanels = document.querySelectorAll('div[role="tabpanel"][data-state="active"]');
         if (activePanels.length === 0) return;
@@ -1363,7 +1643,7 @@
 
     let packScanTimer = null;
     async function renderPacksPage() {
-        if (!isPacksPage()) return;
+        if (!isPacksPage() || !isScriptEnabled()) return;
         if (packScanTimer) return;
 
         packScanTimer = setTimeout(async () => {
@@ -1507,7 +1787,7 @@
     let lbExpanded = false;
 
     async function renderLeaderboardHUD() {
-        if (!isLeaderboardPage() || lbUpdating) return;
+        if (!isLeaderboardPage() || lbUpdating || !isScriptEnabled()) return;
         lbUpdating = true;
         try {
             const allRecords = getCustomRecords();
@@ -1633,50 +1913,75 @@
 
         if (currentUrl !== lastUrl) {
             lastUrl = currentUrl;
+            cardRenderAttempts = 0;
+            if (cardRenderRetryTimer) {
+                clearTimeout(cardRenderRetryTimer);
+                cardRenderRetryTimer = null;
+            }
+
             const lbPill = document.getElementById('theo-lb-pill');
             if (lbPill && !isLeaderboardPage()) lbPill.remove();
 
             setTimeout(() => {
+                ensureSettingsUI();
                 if (isMyProfilePage()) {
-                    scaleRecordBars(); // Run autonomous bar-scaler instantly on URL change
-                    if (window.location.search.includes('tab=packs')) {
-                        renderProfilePacksTab();
-                    } else { render(); }
+                    if (isScriptEnabled()) {
+                        ensureFab();
+                        scaleRecordBars();
+                        if (window.location.search.includes('tab=packs')) {
+                            renderProfilePacksTab();
+                        } else {
+                            render();
+                        }
+                    } else {
+                        stripAllTheoVisuals();
+                    }
                 } else if (isOtherProfilePage()) {
                     document.querySelectorAll('.theo-clone, .theo-profile-pack-injected, #theo-isolated-pack-container, #theo-fab').forEach(el => el.remove());
                 }
-                if (isPacksPage()) renderPacksPage();
-                if (isLeaderboardPage()) renderLeaderboardHUD();
+                if (isPacksPage() && isScriptEnabled()) renderPacksPage();
+                if (isLeaderboardPage() && isScriptEnabled()) renderLeaderboardHUD();
             }, 200);
         } else {
+            ensureSettingsUI();
             if (isMyProfilePage()) {
+                if (!isScriptEnabled()) return;
 
-                // Active Scan: Detect unscaled dynamically-loaded React bars and scale them
                 const unscaledBars = document.querySelectorAll('.bg-surface div[role="progressbar"]:not([data-theo-scaled="true"])');
                 if (unscaledBars.length > 0) scaleRecordBars();
 
                 if (window.location.search.includes('tab=packs')) {
                     if (!document.querySelector('.theo-profile-pack-injected')) renderProfilePacksTab();
                 } else if (!document.querySelector('.theo-clone') && getCustomRecords().filter(r => !r.hidden).length > 0) {
-                    render();
+                    scheduleCardRenderRetry();
                 }
             } else if (isOtherProfilePage()) {
                 document.querySelectorAll('.theo-clone, .theo-profile-pack-injected, #theo-isolated-pack-container, #theo-fab').forEach(el => el.remove());
             }
-            if (isPacksPage()) renderPacksPage();
+            if (isPacksPage() && isScriptEnabled()) renderPacksPage();
         }
     }).observe(document.body, { childList: true, subtree: true });
 
     setTimeout(() => {
         checkAndAutoDetectUser();
         syncRecordsWithApi();
+        ensureSettingsUI();
+        document.body.classList.toggle('theo-seamless', isScriptEnabled() && isSeamlessMode());
+
         if (isMyProfilePage()) {
-            if (window.location.search.includes('tab=packs')) renderProfilePacksTab();
-            else render();
+            if (isScriptEnabled()) {
+                ensureFab();
+                if (window.location.search.includes('tab=packs')) {
+                    renderProfilePacksTab();
+                } else {
+                    cardRenderAttempts = 0;
+                    render();
+                }
+            }
         } else if (isOtherProfilePage()) {
             document.querySelectorAll('.theo-clone, .theo-profile-pack-injected, #theo-isolated-pack-container, #theo-fab').forEach(el => el.remove());
         }
-        if (isPacksPage()) renderPacksPage();
-        if (isLeaderboardPage()) renderLeaderboardHUD();
-    }, 400);
+        if (isPacksPage() && isScriptEnabled()) renderPacksPage();
+        if (isLeaderboardPage() && isScriptEnabled()) renderLeaderboardHUD();
+    }, 300);
 })();
